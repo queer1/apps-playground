@@ -1,4 +1,10 @@
 var officeMain = {
+	onStartup: function(){
+		require(["dojo/ready"], function(ready) {
+				ready(function(){alert("ready!");});
+		});
+	},
+			
 	onView: function(dir, file) {
 		OC.addStyle('office', 'webodf');
 		OC.addScript('office', 'webodf-debug').done(function() {
@@ -48,4 +54,8 @@ $(document).ready(function() {
 		officeMain.onView('', $(this).attr('data-file'));
 	});
 	$('#odf_close').live('click', officeMain.onClose);
+	
+	OC.addScript('office', 'dojo-amalgamation', officeMain.onStartup);
+	
+
 });
