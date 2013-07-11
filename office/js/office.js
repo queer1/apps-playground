@@ -1,7 +1,7 @@
 var officeMain = {
 	onStartup: function(){
 		require(["dojo/ready"], function(ready) {
-				ready(function(){alert("ready!");});
+			ready(function(){alert("ready B!");});
 		});
 	},
 			
