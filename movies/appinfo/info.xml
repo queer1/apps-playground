@@ -4,7 +4,7 @@
 	<name>Movies</name>
 	<description>A Player for movies</description>
 	<licence>AGPL</licence>
-	<author>Frank Karlitschek</author>
-	<require>4</require>
+	<author>Frank Karlitschek, Georg Ehrke</author>
+	<require>5</require>
 	<shipped>true</shipped>
 </info>

@@ -20,20 +20,24 @@
  * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
  * 
  */
+namespace OCA\Movies;
 
-require_once('lib/movies.php');
+\OCP\User::checkLoggedIn();
+\OCP\JSON::checkAppEnabled('movies');
+\OCP\App::setActiveNavigationEntry( 'movies_index' );
 
+\OCP\Util::addStyle( 'movies', 'style' );
+\OCP\Util::addScript( 'movies', 'app' );
+\OCP\Util::addScript( 'movies/3rdparty', 'masonry.pkgd' );
 
-OCP\User::checkLoggedIn();
-OCP\JSON::checkAppEnabled('movies');
-OCP\App::setActiveNavigationEntry( 'movies_index' );
+\OCP\Util::addStyle( 'files_videoviewer', 'style' );
+\OCP\Util::addStyle( 'files_videoviewer', 'mediaelementplayer' );
+\OCP\Util::addscript( 'files_videoviewer', 'viewer');
 
-OCP\Util::addStyle( 'movies', 'style' );
-
-
-$list=\OCA_Movies\Storage::getMovies();
-$tmpl = new OCP\Template('movies', 'movies', 'user');
-$tmpl->assign('list', $list);
+$manager = new MoviesManager();
+$movies = $manager->getMovies();
+$tmpl = new \OCP\Template('movies', 'movies', 'user');
+$tmpl->assign('movies', $movies);
 $tmpl->printPage();
 
 

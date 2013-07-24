@@ -4,7 +4,9 @@
  * ownCloud - Movies App
  *
  * @author Frank Karlitschek
- * @copyright 2012 Frank Karlitschek frank@owncloud.org
+ * @copyright 2013 Frank Karlitschek frank@owncloud.org
+ * @author Georg Ehrke
+ * @copyright 2013 Georg Ehrke georg@owncloud.com
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
@@ -20,29 +22,61 @@
  * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
  * 
  */
+namespace OCA\Movies;
 
+use OC\Files\Filesystem;
+use OC\Files\View;
+use OC\Files\Cache\Cache;
 
-namespace OCA_Movies;
+class MoviesManager {
 
-class Storage {
+	private $cache;
+	private $fileview;
 
-	public static function getMovies() {
-		$movies=array();
-		$list=\OC_FileCache::searchByMime('video' );
-		foreach($list as $l) {
-			$info=pathinfo($l);
-			$size=\OC_Filesystem::filesize($l);
-			$mtime=\OC_Filesystem::filemtime($l);
+	private $movies;
 
-			$entry=array('url'=>$l,'name'=>$info['filename'],'size'=>$size,'mtime'=>$mtime);
-			$movies[]=$entry;
+	public function __construct($user=null) {
+		if(is_null($user)) {
+			$user = \OCP\User::getUser();
 		}
 
-	
-		return $movies;
+		$root = $user . '/files/';
+		list($storage, $internalPath) = Filesystem::resolvePath($root);
+
+		$this->fileview = new View($root);
+		$this->cache = new Cache($storage);
 	}
-	
 
+	public function getMovies() {
+		if(!empty($this->movies)) {
+			return $this->movies;
+		}
+
+		$movies = $this->cache->searchByMime('video');
+
+		foreach($movies as $movie) {
+			$url = substr($movie['path'], 6);
+			$entry = array(
+				'url' => $url,
+				'dir' => substr($url, 0, strlen($url) - strlen($movie['name'])),
+				'name' => $movie['name'],
+				'size' => $movie['size'],
+				'mtime' => $movie['mtime'],
+				'mime' => $movie['mimetype'],
+				'preview' => $this->getPreviewUrl($movie['path']),
+			);
+
+			$this->movies[] = $entry;
+		}
+
+		return $this->movies;
+	}
+
+	private function getPreviewUrl($path) {
+		$x = 200;
+		$y = 113;
+		$path = substr($path, 6);
+
+		return \OCP\Util::linkToRoute( 'core_ajax_preview', array('x' => $x, 'y' => $y, 'file' => urlencode($path) ));
+	}
 }
-
-?>
