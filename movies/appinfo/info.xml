@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <info>
 	<id>movies</id>
-	<name>Movies</name>
-	<description>A Player for movies</description>
+	<name>Videos</name>
+	<description>A Player for videos</description>
 	<licence>AGPL</licence>
 	<author>Frank Karlitschek, Georg Ehrke</author>
 	<require>5</require>
