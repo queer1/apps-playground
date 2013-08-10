@@ -33,4 +33,6 @@ OCP\App::addNavigationEntry(array(
 	'name' => 'Office')
 );
 
-OC::$CLASSPATH['OCA\Office\Storage'] = 'office/lib/storage.php';
+OC::$CLASSPATH['OCA\Office\Controller'] = 'office/ajax/controller.php';
+OC::$CLASSPATH['OCA\Office\Download\Simple'] = 'office/lib/download/simple.php';
+OC::$CLASSPATH['OCA\Office\Download\Range'] = 'office/lib/download/range.php';

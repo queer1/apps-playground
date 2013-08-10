@@ -1,5 +1,8 @@
 /*
 
+
+ Copyright (C) 2012 KO GmbH <copyright@kogmbh.com>
+
  @licstart
  The JavaScript code in this page is free software: you can redistribute it
  and/or modify it under the terms of the GNU Affero General Public License
@@ -28,18 +31,26 @@
  This license applies to this entire compilation.
  @licend
  @source: http://www.webodf.org/
- @source: http://gitorious.org/odfkit/webodf/
+ @source: http://gitorious.org/webodf/webodf/
 */
 var core = {};
 var gui = {};
 var xmldom = {};
 var odf = {};
+var ops = {};
 function Runtime() {
 }
 Runtime.ByteArray = function(size) {
 };
+Runtime.prototype.getVariable = function(name) {
+};
+Runtime.prototype.toJson = function(anything) {
+};
+Runtime.prototype.fromJson = function(jsonstr) {
+};
 Runtime.ByteArray.prototype.slice = function(start, end) {
 };
+Runtime.ByteArray.prototype.length = 0;
 Runtime.prototype.byteArrayFromArray = function(array) {
 };
 Runtime.prototype.byteArrayFromString = function(string, encoding) {
@@ -68,13 +79,19 @@ Runtime.prototype.log = function(msgOrCategory, msg) {
 };
 Runtime.prototype.setTimeout = function(callback, milliseconds) {
 };
+Runtime.prototype.clearTimeout = function(timeoutID) {
+};
 Runtime.prototype.libraryPaths = function() {
 };
 Runtime.prototype.type = function() {
 };
 Runtime.prototype.getDOMImplementation = function() {
 };
+Runtime.prototype.parseXML = function(xml) {
+};
 Runtime.prototype.getWindow = function() {
+};
+Runtime.prototype.assert = function(condition, message, callback) {
 };
 var IS_COMPILED_CODE = false;
 Runtime.byteArrayToString = function(bytearray, encoding) {
@@ -86,7 +103,7 @@ Runtime.byteArrayToString = function(bytearray, encoding) {
     return s
   }
   function utf8ByteArrayToString(bytearray) {
-    var s = "", i, l = bytearray.length, c0, c1, c2;
+    var s = "", i, l = bytearray.length, c0, c1, c2, c3, codepoint;
     for(i = 0;i < l;i += 1) {
       c0 = bytearray[i];
       if(c0 < 128) {
@@ -94,12 +111,22 @@ Runtime.byteArrayToString = function(bytearray, encoding) {
       }else {
         i += 1;
         c1 = bytearray[i];
-        if(c0 < 224) {
+        if(c0 >= 194 && c0 < 224) {
           s += String.fromCharCode((c0 & 31) << 6 | c1 & 63)
         }else {
           i += 1;
           c2 = bytearray[i];
-          s += String.fromCharCode((c0 & 15) << 12 | (c1 & 63) << 6 | c2 & 63)
+          if(c0 >= 224 && c0 < 240) {
+            s += String.fromCharCode((c0 & 15) << 12 | (c1 & 63) << 6 | c2 & 63)
+          }else {
+            i += 1;
+            c3 = bytearray[i];
+            if(c0 >= 240 && c0 < 245) {
+              codepoint = (c0 & 7) << 18 | (c1 & 63) << 12 | (c2 & 63) << 6 | c3 & 63;
+              codepoint -= 65536;
+              s += String.fromCharCode((codepoint >> 10) + 55296, (codepoint & 1023) + 56320)
+            }
+          }
         }
       }
     }
@@ -116,6 +143,19 @@ Runtime.byteArrayToString = function(bytearray, encoding) {
   }
   return result
 };
+Runtime.getVariable = function(name) {
+  try {
+    return eval(name)
+  }catch(e) {
+    return undefined
+  }
+};
+Runtime.toJson = function(anything) {
+  return JSON.stringify(anything)
+};
+Runtime.fromJson = function(jsonstr) {
+  return JSON.parse(jsonstr)
+};
 Runtime.getFunctionName = function getFunctionName(f) {
   var m;
   if(f.name === undefined) {
@@ -126,7 +166,7 @@ Runtime.getFunctionName = function getFunctionName(f) {
 };
 function BrowserRuntime(logoutput) {
   var self = this, cache = {}, useNativeArray = window.ArrayBuffer && window.Uint8Array;
-  this.ByteArray = useNativeArray ? function ByteArray(size) {
+  if(useNativeArray) {
     Uint8Array.prototype.slice = function(begin, end) {
       if(end === undefined) {
         if(begin === undefined) {
@@ -141,7 +181,9 @@ function BrowserRuntime(logoutput) {
         array[i] = view[i]
       }
       return array
-    };
+    }
+  }
+  this.ByteArray = useNativeArray ? function ByteArray(size) {
     return new Uint8Array(new ArrayBuffer(size))
   } : function ByteArray(size) {
     var a = [];
@@ -211,9 +253,12 @@ function BrowserRuntime(logoutput) {
     return result
   };
   this.byteArrayToString = Runtime.byteArrayToString;
+  this.getVariable = Runtime.getVariable;
+  this.fromJson = Runtime.fromJson;
+  this.toJson = Runtime.toJson;
   function log(msgOrCategory, msg) {
     var node, doc, category;
-    if(msg) {
+    if(msg !== undefined) {
       category = msgOrCategory
     }else {
       msg = msgOrCategory
@@ -228,13 +273,29 @@ function BrowserRuntime(logoutput) {
         logoutput.appendChild(doc.createTextNode(" "))
       }
       node = doc.createElement("span");
-      node.appendChild(doc.createTextNode(msg));
+      if(msg.length > 0 && msg[0] === "<") {
+        node.innerHTML = msg
+      }else {
+        node.appendChild(doc.createTextNode(msg))
+      }
       logoutput.appendChild(node);
       logoutput.appendChild(doc.createElement("br"))
     }else {
       if(console) {
         console.log(msg)
       }
+    }
+    if(category === "alert") {
+      alert(msg)
+    }
+  }
+  function assert(condition, message, callback) {
+    if(!condition) {
+      log("alert", "ASSERTION FAILED:\n" + message);
+      if(callback) {
+        callback()
+      }
+      throw message;
     }
   }
   function readFile(path, encoding, callback) {
@@ -251,7 +312,7 @@ function BrowserRuntime(logoutput) {
         }else {
           if(xhr.status === 200 || xhr.status === 0) {
             if(encoding === "binary") {
-              if(typeof VBArray !== "undefined") {
+              if(xhr.responseBody !== null && String(typeof VBArray) !== "undefined") {
                 data = (new VBArray(xhr.responseBody)).toArray()
               }else {
                 data = self.byteArrayFromString(xhr.responseText, "binary")
@@ -295,10 +356,15 @@ function BrowserRuntime(logoutput) {
           callback("File " + path + " is empty.")
         }else {
           if(xhr.status === 200 || xhr.status === 0) {
-            if(typeof VBArray !== "undefined") {
-              data = (new VBArray(xhr.responseBody)).toArray()
+            if(xhr.response) {
+              data = (xhr.response);
+              data = new Uint8Array(data)
             }else {
-              data = self.byteArrayFromString(xhr.responseText, "binary")
+              if(xhr.responseBody !== null && String(typeof VBArray) !== "undefined") {
+                data = (new VBArray(xhr.responseBody)).toArray()
+              }else {
+                data = self.byteArrayFromString(xhr.responseText, "binary")
+              }
             }
             cache[path] = data;
             callback(null, data.slice(offset, offset + length))
@@ -313,6 +379,7 @@ function BrowserRuntime(logoutput) {
     if(xhr.overrideMimeType) {
       xhr.overrideMimeType("text/plain; charset=x-user-defined")
     }
+    xhr.responseType = "arraybuffer";
     try {
       xhr.send(null)
     }catch(e) {
@@ -334,7 +401,7 @@ function BrowserRuntime(logoutput) {
       if(xhr.status === 200 || xhr.status === 0) {
         result = xhr.responseText
       }
-    }catch(e) {
+    }catch(ignore) {
     }
     return result
   }
@@ -373,6 +440,7 @@ function BrowserRuntime(logoutput) {
     }
   }
   function deleteFile(path, callback) {
+    delete cache[path];
     var xhr = new XMLHttpRequest;
     xhr.open("DELETE", path, true);
     xhr.onreadystatechange = function() {
@@ -428,25 +496,16 @@ function BrowserRuntime(logoutput) {
       if(cl) {
         callback(parseInt(cl, 10))
       }else {
-        callback(-1)
+        readFile(path, "binary", function(err, data) {
+          if(!err) {
+            callback(data.length)
+          }else {
+            callback(-1)
+          }
+        })
       }
     };
     xhr.send(null)
-  }
-  function wrap(nativeFunction, nargs) {
-    if(!nativeFunction) {
-      return null
-    }
-    return function() {
-      cache = {};
-      var callback = arguments[nargs], args = Array.prototype.slice.call(arguments, 0, nargs), callbackname = "callback" + String(Math.random()).substring(2);
-      window[callbackname] = function() {
-        delete window[callbackname];
-        callback.apply(this, arguments)
-      };
-      args.push(callbackname);
-      nativeFunction.apply(this, args)
-    }
   }
   this.readFile = readFile;
   this.read = read;
@@ -457,21 +516,29 @@ function BrowserRuntime(logoutput) {
   this.isFile = isFile;
   this.getFileSize = getFileSize;
   this.log = log;
+  this.assert = assert;
   this.setTimeout = function(f, msec) {
-    setTimeout(function() {
+    return setTimeout(function() {
       f()
     }, msec)
+  };
+  this.clearTimeout = function(timeoutID) {
+    clearTimeout(timeoutID)
   };
   this.libraryPaths = function() {
     return["lib"]
   };
-  this.setCurrentDirectory = function(dir) {
+  this.setCurrentDirectory = function() {
   };
   this.type = function() {
     return"BrowserRuntime"
   };
   this.getDOMImplementation = function() {
     return window.document.implementation
+  };
+  this.parseXML = function(xml) {
+    var parser = new DOMParser;
+    return parser.parseFromString(xml, "text/xml")
   };
   this.exit = function(exitCode) {
     log("Calling exit with code " + String(exitCode) + ", but exit() is not implemented.")
@@ -481,7 +548,7 @@ function BrowserRuntime(logoutput) {
   }
 }
 function NodeJSRuntime() {
-  var self = this, fs = require("fs"), currentDirectory = "";
+  var self = this, fs = require("fs"), pathmod = require("path"), currentDirectory = "", parser, domImplementation;
   this.ByteArray = function(size) {
     return new Buffer(size)
   };
@@ -504,41 +571,52 @@ function NodeJSRuntime() {
   this.byteArrayToString = function(bytearray, encoding) {
     return bytearray.toString(encoding)
   };
+  this.getVariable = Runtime.getVariable;
+  this.fromJson = Runtime.fromJson;
+  this.toJson = Runtime.toJson;
   function isFile(path, callback) {
-    if(currentDirectory) {
-      path = currentDirectory + "/" + path
-    }
+    path = pathmod.resolve(currentDirectory, path);
     fs.stat(path, function(err, stats) {
       callback(!err && stats.isFile())
     })
   }
-  function loadXML(path, callback) {
-    throw"Not implemented.";
-  }
-  this.readFile = function(path, encoding, callback) {
+  function readFile(path, encoding, callback) {
+    path = pathmod.resolve(currentDirectory, path);
     if(encoding !== "binary") {
       fs.readFile(path, encoding, callback)
     }else {
       fs.readFile(path, null, callback)
     }
-  };
+  }
+  this.readFile = readFile;
+  function loadXML(path, callback) {
+    readFile(path, "utf-8", function(err, data) {
+      if(err) {
+        return callback(err)
+      }
+      callback(null, self.parseXML(data))
+    })
+  }
+  this.loadXML = loadXML;
   this.writeFile = function(path, data, callback) {
+    path = pathmod.resolve(currentDirectory, path);
     fs.writeFile(path, data, "binary", function(err) {
       callback(err || null)
     })
   };
-  this.deleteFile = fs.unlink;
+  this.deleteFile = function(path, callback) {
+    path = pathmod.resolve(currentDirectory, path);
+    fs.unlink(path, callback)
+  };
   this.read = function(path, offset, length, callback) {
-    if(currentDirectory) {
-      path = currentDirectory + "/" + path
-    }
+    path = pathmod.resolve(currentDirectory, path);
     fs.open(path, "r+", 666, function(err, fd) {
       if(err) {
         callback(err);
         return
       }
       var buffer = new Buffer(length);
-      fs.read(fd, buffer, 0, length, offset, function(err, bytesRead) {
+      fs.read(fd, buffer, 0, length, offset, function(err) {
         fs.close(fd);
         callback(err, buffer)
       })
@@ -548,14 +626,14 @@ function NodeJSRuntime() {
     if(!encoding) {
       return""
     }
+    if(encoding === "binary") {
+      return fs.readFileSync(path, null)
+    }
     return fs.readFileSync(path, encoding)
   };
-  this.loadXML = loadXML;
   this.isFile = isFile;
   this.getFileSize = function(path, callback) {
-    if(currentDirectory) {
-      path = currentDirectory + "/" + path
-    }
+    path = pathmod.resolve(currentDirectory, path);
     fs.stat(path, function(err, stats) {
       if(err) {
         callback(-1)
@@ -564,13 +642,38 @@ function NodeJSRuntime() {
       }
     })
   };
-  this.log = function(msg) {
-    process.stderr.write(msg + "\n")
-  };
+  function log(msgOrCategory, msg) {
+    var category;
+    if(msg !== undefined) {
+      category = msgOrCategory
+    }else {
+      msg = msgOrCategory
+    }
+    if(category === "alert") {
+      process.stderr.write("\n!!!!! ALERT !!!!!" + "\n")
+    }
+    process.stderr.write(msg + "\n");
+    if(category === "alert") {
+      process.stderr.write("!!!!! ALERT !!!!!" + "\n")
+    }
+  }
+  this.log = log;
+  function assert(condition, message, callback) {
+    if(!condition) {
+      process.stderr.write("ASSERTION FAILED: " + message);
+      if(callback) {
+        callback()
+      }
+    }
+  }
+  this.assert = assert;
   this.setTimeout = function(f, msec) {
-    setTimeout(function() {
+    return setTimeout(function() {
       f()
     }, msec)
+  };
+  this.clearTimeout = function(timeoutID) {
+    clearTimeout(timeoutID)
   };
   this.libraryPaths = function() {
     return[__dirname]
@@ -585,12 +688,21 @@ function NodeJSRuntime() {
     return"NodeJSRuntime"
   };
   this.getDOMImplementation = function() {
-    return null
+    return domImplementation
+  };
+  this.parseXML = function(xml) {
+    return parser.parseFromString(xml, "text/xml")
   };
   this.exit = process.exit;
   this.getWindow = function() {
     return null
+  };
+  function init() {
+    var DOMParser = require("xmldom").DOMParser;
+    parser = new DOMParser;
+    domImplementation = self.parseXML("<a/>").implementation
   }
+  init()
 }
 function RhinoRuntime() {
   var self = this, dom = Packages.javax.xml.parsers.DocumentBuilderFactory.newInstance(), builder, entityresolver, currentDirectory = "";
@@ -622,6 +734,9 @@ function RhinoRuntime() {
     return a
   };
   this.byteArrayToString = Runtime.byteArrayToString;
+  this.getVariable = Runtime.getVariable;
+  this.fromJson = Runtime.fromJson;
+  this.toJson = Runtime.toJson;
   this.concatByteArrays = function(bytearray1, bytearray2) {
     return bytearray1.concat(bytearray2)
   };
@@ -637,6 +752,9 @@ function RhinoRuntime() {
     callback(null, document)
   }
   function runtimeReadFile(path, encoding, callback) {
+    if(currentDirectory) {
+      path = currentDirectory + "/" + path
+    }
     var file = new Packages.java.io.File(path), data, rhinoencoding = encoding === "binary" ? "latin1" : encoding;
     if(!file.isFile()) {
       callback(path + " is not a file.")
@@ -649,7 +767,7 @@ function RhinoRuntime() {
     }
   }
   function runtimeReadFileSync(path, encoding) {
-    var file = new Packages.java.io.File(path), data, i;
+    var file = new Packages.java.io.File(path);
     if(!file.isFile()) {
       return null
     }
@@ -668,6 +786,9 @@ function RhinoRuntime() {
   this.loadXML = loadXML;
   this.readFile = runtimeReadFile;
   this.writeFile = function(path, data, callback) {
+    if(currentDirectory) {
+      path = currentDirectory + "/" + path
+    }
     var out = new Packages.java.io.FileOutputStream(path), i, l = data.length;
     for(i = 0;i < l;i += 1) {
       out.write(data[i])
@@ -676,6 +797,9 @@ function RhinoRuntime() {
     callback(null)
   };
   this.deleteFile = function(path, callback) {
+    if(currentDirectory) {
+      path = currentDirectory + "/" + path
+    }
     var file = new Packages.java.io.File(path);
     if(file["delete"]()) {
       callback(null)
@@ -708,9 +832,36 @@ function RhinoRuntime() {
     var file = new Packages.java.io.File(path);
     callback(file.length())
   };
-  this.log = print;
-  this.setTimeout = function(f, msec) {
-    f()
+  function log(msgOrCategory, msg) {
+    var category;
+    if(msg !== undefined) {
+      category = msgOrCategory
+    }else {
+      msg = msgOrCategory
+    }
+    if(category === "alert") {
+      print("\n!!!!! ALERT !!!!!")
+    }
+    print(msg);
+    if(category === "alert") {
+      print("!!!!! ALERT !!!!!")
+    }
+  }
+  this.log = log;
+  function assert(condition, message, callback) {
+    if(!condition) {
+      log("alert", "ASSERTION FAILED: " + message);
+      if(callback) {
+        callback()
+      }
+    }
+  }
+  this.assert = assert;
+  this.setTimeout = function(f) {
+    f();
+    return 0
+  };
+  this.clearTimeout = function() {
   };
   this.libraryPaths = function() {
     return["lib"]
@@ -727,6 +878,9 @@ function RhinoRuntime() {
   this.getDOMImplementation = function() {
     return builder.getDOMImplementation()
   };
+  this.parseXML = function(xml) {
+    return builder.parse(xml)
+  };
   this.exit = quit;
   this.getWindow = function() {
     return null
@@ -734,10 +888,10 @@ function RhinoRuntime() {
 }
 var runtime = function() {
   var result;
-  if(typeof window !== "undefined") {
+  if(String(typeof window) !== "undefined") {
     result = new BrowserRuntime(window.document.getElementById("logoutput"))
   }else {
-    if(typeof require !== "undefined") {
+    if(String(typeof require) !== "undefined") {
       result = new NodeJSRuntime
     }else {
       result = new RhinoRuntime
@@ -753,6 +907,8 @@ var runtime = function() {
     for(i = 1;i < packageNameComponents.length - 1;i += 1) {
       if(!pkg.hasOwnProperty(packageNameComponents[i])) {
         pkg = pkg[packageNameComponents[i]] = {}
+      }else {
+        pkg = pkg[packageNameComponents[i]]
       }
     }
     return pkg[packageNameComponents[packageNameComponents.length - 1]]
@@ -771,23 +927,23 @@ var runtime = function() {
       return
     }
     function getPathFromManifests(classpath) {
-      var path = classpath.replace(".", "/") + ".js", dirs = runtime.libraryPaths(), i, dir, code;
+      var path = classpath.replace(/\./g, "/") + ".js", dirs = runtime.libraryPaths(), i, dir, code;
       if(runtime.currentDirectory) {
         dirs.push(runtime.currentDirectory())
       }
       for(i = 0;i < dirs.length;i += 1) {
         dir = dirs[i];
         if(!dircontents.hasOwnProperty(dir)) {
-          code = runtime.readFileSync(dirs[i] + "/manifest.js", "utf8");
-          if(code && code.length) {
-            try {
+          try {
+            code = runtime.readFileSync(dirs[i] + "/manifest.js", "utf8");
+            if(code && code.length) {
               dircontents[dir] = eval(code)
-            }catch(e1) {
-              dircontents[dir] = null;
-              runtime.log("Cannot load manifest for " + dir + ".")
+            }else {
+              dircontents[dir] = null
             }
-          }else {
-            dircontents[dir] = null
+          }catch(e1) {
+            dircontents[dir] = null;
+            runtime.log("Cannot load manifest for " + dir + ".")
           }
         }
         code = null;
@@ -813,6 +969,8 @@ var runtime = function() {
       if(code === undefined) {
         throw"Cannot load class " + classpath;
       }
+      code += "\n//# sourceURL=" + path;
+      code += "\n//@ sourceURL=" + path;
       try {
         code = eval(classpath + " = eval(code);")
       }catch(e4) {
@@ -830,31 +988,35 @@ var runtime = function() {
   }
 })();
 (function(args) {
-  args = Array.prototype.slice.call(args);
+  if(args) {
+    args = Array.prototype.slice.call((args))
+  }else {
+    args = []
+  }
   function run(argv) {
     if(!argv.length) {
       return
     }
     var script = argv[0];
     runtime.readFile(script, "utf8", function(err, code) {
-      var path = "", paths = runtime.libraryPaths();
+      var path = "", codestring = (code);
       if(script.indexOf("/") !== -1) {
         path = script.substring(0, script.indexOf("/"))
       }
       runtime.setCurrentDirectory(path);
-      function run() {
-        var script, path, paths, args, argv, result;
-        result = eval(code);
+      function inner_run() {
+        var script, path, args, argv, result;
+        result = eval(codestring);
         if(result) {
           runtime.exit(result)
         }
         return
       }
-      if(err) {
+      if(err || codestring === null) {
         runtime.log(err);
         runtime.exit(1)
       }else {
-        run.apply(null, argv)
+        inner_run.apply(null, argv)
       }
     })
   }
@@ -867,29 +1029,15 @@ var runtime = function() {
       run(args.slice(1))
     }
   }
-})(typeof arguments !== "undefined" && arguments);
+})(String(typeof arguments) !== "undefined" && arguments);
 core.Base64 = function() {
-  var b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", b64charcodes = function() {
-    var a = [], i, codeA = "A".charCodeAt(0), codea = "a".charCodeAt(0), code0 = "0".charCodeAt(0);
-    for(i = 0;i < 26;i += 1) {
-      a.push(codeA + i)
-    }
-    for(i = 0;i < 26;i += 1) {
-      a.push(codea + i)
-    }
-    for(i = 0;i < 10;i += 1) {
-      a.push(code0 + i)
-    }
-    a.push("+".charCodeAt(0));
-    a.push("/".charCodeAt(0));
-    return a
-  }(), b64tab = function(bin) {
+  var b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", b64tab = function(bin) {
     var t = {}, i, l;
     for(i = 0, l = bin.length;i < l;i += 1) {
       t[bin.charAt(i)] = i
     }
     return t
-  }(b64chars), convertUTF16StringToBase64, convertBase64ToUTF16String, btoa, atob;
+  }(b64chars), convertUTF16StringToBase64, convertBase64ToUTF16String, window = runtime.getWindow(), btoa, atob;
   function stringToArray(s) {
     var a = [], i, l = s.length;
     for(i = 0;i < l;i += 1) {
@@ -1006,7 +1154,7 @@ core.Base64 = function() {
     return str
   }
   function convertUTF8StringToUTF16String(bin, callback) {
-    var partsize = 1E5, numparts = bin.length / partsize, str = "", pos = 0;
+    var partsize = 1E5, str = "", pos = 0;
     if(bin.length < partsize) {
       callback(convertUTF8StringToUTF16String_internal(bin, 0, bin.length), true);
       return
@@ -1037,8 +1185,10 @@ core.Base64 = function() {
   function convertUTF16StringToUTF8String(uni) {
     return String.fromCharCode.apply(String, convertUTF16ArrayToUTF8Array(stringToArray(uni)))
   }
-  btoa = runtime.getWindow() && runtime.getWindow().btoa;
-  if(btoa) {
+  if(window && window.btoa) {
+    btoa = function(b) {
+      return window.btoa(b)
+    };
     convertUTF16StringToBase64 = function(uni) {
       return btoa(convertUTF16StringToUTF8String(uni))
     }
@@ -1048,8 +1198,10 @@ core.Base64 = function() {
       return convertUTF8ArrayToBase64(convertUTF16StringToUTF8Array(uni))
     }
   }
-  atob = runtime.getWindow() && runtime.getWindow().atob;
-  if(atob) {
+  if(window && window.atob) {
+    atob = function(a) {
+      return window.atob(a)
+    };
     convertBase64ToUTF16String = function(b64) {
       var b = atob(b64);
       return convertUTF8StringToUTF16String_internal(b, 0, b.length)
@@ -1221,30 +1373,6 @@ core.RawDeflate = function() {
     zip_flag_buf = [];
     zip_flag_buf.length = parseInt(zip_LIT_BUFSIZE / 8, 10)
   }
-  var zip_deflate_end = function() {
-    zip_free_queue = zip_qhead = zip_qtail = null;
-    zip_outbuf = null;
-    zip_window = null;
-    zip_d_buf = null;
-    zip_l_buf = null;
-    zip_prev = null;
-    zip_dyn_ltree = null;
-    zip_dyn_dtree = null;
-    zip_static_ltree = null;
-    zip_static_dtree = null;
-    zip_bl_tree = null;
-    zip_l_desc = null;
-    zip_d_desc = null;
-    zip_bl_desc = null;
-    zip_bl_count = null;
-    zip_heap = null;
-    zip_depth = null;
-    zip_length_code = null;
-    zip_dist_code = null;
-    zip_base_length = null;
-    zip_base_dist = null;
-    zip_flag_buf = null
-  };
   var zip_reuse_queue = function(p) {
     p.next = zip_free_queue;
     zip_free_queue = p
@@ -1435,7 +1563,8 @@ core.RawDeflate = function() {
         scan_end1 = zip_window[scanp + best_len - 1];
         scan_end = zip_window[scanp + best_len]
       }
-    }while((cur_match = zip_prev[cur_match & zip_WMASK]) > limit && --chain_length !== 0);
+      cur_match = zip_prev[cur_match & zip_WMASK]
+    }while(cur_match > limit && --chain_length !== 0);
     return best_len
   };
   var zip_ct_tally = function(dist, lc) {
@@ -1571,8 +1700,9 @@ core.RawDeflate = function() {
       code = code + zip_bl_count[bits - 1] << 1;
       next_code[bits] = code
     }
+    var len;
     for(n = 0;n <= max_code;n++) {
-      var len = tree[n].dl;
+      len = tree[n].dl;
       if(len === 0) {
         continue
       }
@@ -1596,8 +1726,9 @@ core.RawDeflate = function() {
         tree[n].dl = 0
       }
     }
+    var xnew;
     while(zip_heap_len < 2) {
-      var xnew = zip_heap[++zip_heap_len] = max_code < 2 ? ++max_code : 0;
+      xnew = zip_heap[++zip_heap_len] = max_code < 2 ? ++max_code : 0;
       tree[xnew].fc = 1;
       zip_depth[xnew] = 0;
       zip_opt_len--;
@@ -1648,21 +1779,20 @@ core.RawDeflate = function() {
       nextlen = tree[n + 1].dl;
       if(++count < max_count && curlen === nextlen) {
         continue
+      }
+      if(count < min_count) {
+        zip_bl_tree[curlen].fc += count
       }else {
-        if(count < min_count) {
-          zip_bl_tree[curlen].fc += count
+        if(curlen !== 0) {
+          if(curlen !== prevlen) {
+            zip_bl_tree[curlen].fc++
+          }
+          zip_bl_tree[zip_REP_3_6].fc++
         }else {
-          if(curlen !== 0) {
-            if(curlen !== prevlen) {
-              zip_bl_tree[curlen].fc++
-            }
-            zip_bl_tree[zip_REP_3_6].fc++
+          if(count <= 10) {
+            zip_bl_tree[zip_REPZ_3_10].fc++
           }else {
-            if(count <= 10) {
-              zip_bl_tree[zip_REPZ_3_10].fc++
-            }else {
-              zip_bl_tree[zip_REPZ_11_138].fc++
-            }
+            zip_bl_tree[zip_REPZ_11_138].fc++
           }
         }
       }
@@ -1762,27 +1892,26 @@ core.RawDeflate = function() {
       nextlen = tree[n + 1].dl;
       if(++count < max_count && curlen === nextlen) {
         continue
+      }
+      if(count < min_count) {
+        do {
+          zip_SEND_CODE(curlen, zip_bl_tree)
+        }while(--count !== 0)
       }else {
-        if(count < min_count) {
-          do {
-            zip_SEND_CODE(curlen, zip_bl_tree)
-          }while(--count !== 0)
+        if(curlen !== 0) {
+          if(curlen !== prevlen) {
+            zip_SEND_CODE(curlen, zip_bl_tree);
+            count--
+          }
+          zip_SEND_CODE(zip_REP_3_6, zip_bl_tree);
+          zip_send_bits(count - 3, 2)
         }else {
-          if(curlen !== 0) {
-            if(curlen !== prevlen) {
-              zip_SEND_CODE(curlen, zip_bl_tree);
-              count--
-            }
-            zip_SEND_CODE(zip_REP_3_6, zip_bl_tree);
-            zip_send_bits(count - 3, 2)
+          if(count <= 10) {
+            zip_SEND_CODE(zip_REPZ_3_10, zip_bl_tree);
+            zip_send_bits(count - 3, 3)
           }else {
-            if(count <= 10) {
-              zip_SEND_CODE(zip_REPZ_3_10, zip_bl_tree);
-              zip_send_bits(count - 3, 3)
-            }else {
-              zip_SEND_CODE(zip_REPZ_11_138, zip_bl_tree);
-              zip_send_bits(count - 11, 7)
-            }
+            zip_SEND_CODE(zip_REPZ_11_138, zip_bl_tree);
+            zip_send_bits(count - 11, 7)
           }
         }
       }
@@ -1869,8 +1998,8 @@ core.RawDeflate = function() {
     }
   };
   var zip_deflate_fast = function() {
+    var flush;
     while(zip_lookahead !== 0 && zip_qhead === null) {
-      var flush;
       zip_INSERT_STRING();
       if(zip_hash_head !== zip_NIL && zip_strstart - zip_hash_head <= zip_MAX_DIST) {
         zip_match_length = zip_longest_match(zip_hash_head);
@@ -1909,6 +2038,7 @@ core.RawDeflate = function() {
     }
   };
   var zip_deflate_better = function() {
+    var flush;
     while(zip_lookahead !== 0 && zip_qhead === null) {
       zip_INSERT_STRING();
       zip_prev_length = zip_match_length;
@@ -1924,7 +2054,6 @@ core.RawDeflate = function() {
         }
       }
       if(zip_prev_length >= zip_MIN_MATCH && zip_match_length <= zip_prev_length) {
-        var flush;
         flush = zip_ct_tally(zip_strstart - 1 - zip_prev_match, zip_prev_length - zip_MIN_MATCH);
         zip_lookahead -= zip_prev_length - 1;
         zip_prev_length -= 2;
@@ -2059,7 +2188,7 @@ core.RawDeflate = function() {
     zip_complete = false
   };
   var zip_qcopy = function(buff, off, buff_size) {
-    var n, i, j;
+    var n, i, j, p;
     n = 0;
     while(zip_qhead !== null && n < buff_size) {
       i = buff_size - n;
@@ -2073,7 +2202,6 @@ core.RawDeflate = function() {
       zip_qhead.len -= i;
       n += i;
       if(zip_qhead.len === 0) {
-        var p;
         p = zip_qhead;
         zip_qhead = zip_qhead.next;
         zip_reuse_queue(p)
@@ -2108,7 +2236,8 @@ core.RawDeflate = function() {
         return 0
       }
     }
-    if((n = zip_qcopy(buff, off, buff_size)) === buff_size) {
+    n = zip_qcopy(buff, off, buff_size);
+    if(n === buff_size) {
       return buff_size
     }
     if(zip_complete) {
@@ -2132,19 +2261,20 @@ core.RawDeflate = function() {
     var i, j;
     zip_deflate_data = str;
     zip_deflate_pos = 0;
-    if(typeof level === "undefined") {
+    if(String(typeof level) === "undefined") {
       level = zip_DEFAULT_LEVEL
     }
     zip_deflate_start(level);
     var buff = new Array(1024);
-    var aout = [];
-    while((i = zip_deflate_internal(buff, 0, buff.length)) > 0) {
-      var cbuf = [];
+    var aout = [], cbuf = [];
+    i = zip_deflate_internal(buff, 0, buff.length);
+    while(i > 0) {
       cbuf.length = i;
       for(j = 0;j < i;j++) {
         cbuf[j] = String.fromCharCode(buff[j])
       }
-      aout[aout.length] = cbuf.join("")
+      aout[aout.length] = cbuf.join("");
+      i = zip_deflate_internal(buff, 0, buff.length)
     }
     zip_deflate_data = null;
     return aout.join("")
@@ -2155,12 +2285,14 @@ core.ByteArray = function ByteArray(data) {
   this.pos = 0;
   this.data = data;
   this.readUInt32LE = function() {
-    var data = this.data, pos = this.pos += 4;
-    return data[--pos] << 24 | data[--pos] << 16 | data[--pos] << 8 | data[--pos]
+    this.pos += 4;
+    var d = this.data, pos = this.pos;
+    return d[--pos] << 24 | d[--pos] << 16 | d[--pos] << 8 | d[--pos]
   };
   this.readUInt16LE = function() {
-    var data = this.data, pos = this.pos += 2;
-    return data[--pos] << 8 | data[--pos]
+    this.pos += 2;
+    var d = this.data, pos = this.pos;
+    return d[--pos] << 8 | d[--pos]
   }
 };
 core.ByteArrayWriter = function ByteArrayWriter(encoding) {
@@ -2795,133 +2927,377 @@ core.RawInflate = function RawInflate() {
   };
   this.inflate = zip_inflate
 };
-core.Cursor = function Cursor(selection, document) {
-  var cursorns, cursorNode;
-  cursorns = "urn:webodf:names:cursor";
-  cursorNode = document.createElementNS(cursorns, "cursor");
-  function putCursorIntoTextNode(container, offset) {
-    var len, ref, textnode, parent;
-    parent = container.parentNode;
-    if(offset === 0) {
-      parent.insertBefore(cursorNode, container)
-    }else {
-      if(offset === container.length) {
-        parent.appendChild(cursorNode)
-      }else {
-        len = container.length;
-        ref = container.nextSibling;
-        textnode = document.createTextNode(container.substringData(offset, len));
-        container.deleteData(offset, len);
-        if(ref) {
-          parent.insertBefore(textnode, ref)
-        }else {
-          parent.appendChild(textnode)
-        }
-        parent.insertBefore(cursorNode, textnode)
+/*
+
+ Copyright (C) 2012 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+core.LoopWatchDog = function LoopWatchDog(timeout, maxChecks) {
+  var startTime = Date.now(), checks = 0;
+  function check() {
+    var t;
+    if(timeout) {
+      t = Date.now();
+      if(t - startTime > timeout) {
+        runtime.log("alert", "watchdog timeout");
+        throw"timeout!";
+      }
+    }
+    if(maxChecks > 0) {
+      checks += 1;
+      if(checks > maxChecks) {
+        runtime.log("alert", "watchdog loop overflow");
+        throw"loop overflow";
       }
     }
   }
-  function putCursorIntoContainer(container, offset) {
-    var node;
-    node = container.firstChild;
-    while(node && offset) {
-      node = node.nextSibling;
-      offset -= 1
+  this.check = check
+};
+core.Utils = function Utils() {
+  function hashString(value) {
+    var hash = 0, i, l;
+    for(i = 0, l = value.length;i < l;i += 1) {
+      hash = (hash << 5) - hash + value.charCodeAt(i);
+      hash |= 0
     }
-    container.insertBefore(cursorNode, node)
+    return hash
   }
-  function getPotentialParentOrNode(parent, node) {
-    var n = node;
-    while(n && n !== parent) {
+  this.hashString = hashString
+};
+core.DomUtils = function DomUtils() {
+  var self = this;
+  function findStablePoint(container, offset) {
+    if(offset < container.childNodes.length) {
+      container = container.childNodes[offset];
+      offset = 0;
+      while(container.firstChild) {
+        container = container.firstChild
+      }
+    }else {
+      while(container.lastChild) {
+        container = container.lastChild;
+        offset = container.nodeType === Node.TEXT_NODE ? container.textContent.length : container.childNodes.length
+      }
+    }
+    return{container:container, offset:offset}
+  }
+  function splitBoundaries(range) {
+    var modifiedNodes = [], end, splitStart;
+    if(range.startContainer.nodeType === Node.TEXT_NODE || range.endContainer.nodeType === Node.TEXT_NODE) {
+      end = findStablePoint(range.endContainer, range.endOffset);
+      range.setEnd(end.container, end.offset);
+      if(range.endOffset !== 0 && range.endContainer.nodeType === Node.TEXT_NODE && range.endOffset !== range.endContainer.length) {
+        modifiedNodes.push(range.endContainer.splitText(range.endOffset));
+        modifiedNodes.push(range.endContainer)
+      }
+      if(range.startOffset !== 0 && range.startContainer.nodeType === Node.TEXT_NODE && range.startOffset !== range.startContainer.length) {
+        splitStart = range.startContainer.splitText(range.startOffset);
+        modifiedNodes.push(range.startContainer);
+        modifiedNodes.push(splitStart);
+        range.setStart(splitStart, 0)
+      }
+    }
+    return modifiedNodes
+  }
+  this.splitBoundaries = splitBoundaries;
+  function containsRange(container, insideRange) {
+    return container.compareBoundaryPoints(container.START_TO_START, insideRange) <= 0 && container.compareBoundaryPoints(container.END_TO_END, insideRange) >= 0
+  }
+  this.containsRange = containsRange;
+  function rangesIntersect(range1, range2) {
+    return range1.compareBoundaryPoints(range1.END_TO_START, range2) <= 0 && range1.compareBoundaryPoints(range1.START_TO_END, range2) >= 0
+  }
+  this.rangesIntersect = rangesIntersect;
+  function getNodesInRange(range, nodeFilter) {
+    var document = range.startContainer.ownerDocument, elements = [], root = (range.commonAncestorContainer), n, treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ALL, nodeFilter, false);
+    treeWalker.currentNode = range.startContainer;
+    n = range.startContainer;
+    while(n) {
+      if(nodeFilter(n) === NodeFilter.FILTER_ACCEPT) {
+        elements.push(n)
+      }else {
+        if(nodeFilter(n) === NodeFilter.FILTER_REJECT) {
+          break
+        }
+      }
       n = n.parentNode
     }
-    return n || node
+    elements.reverse();
+    n = treeWalker.nextNode();
+    while(n) {
+      elements.push(n);
+      n = treeWalker.nextNode()
+    }
+    return elements
   }
-  function removeCursorFromSelectionRange(range, cursorpos) {
-    var cursorParent, start, end;
-    cursorParent = cursorNode.parentNode;
-    start = getPotentialParentOrNode(cursorNode, range.startContainer);
-    end = getPotentialParentOrNode(cursorNode, range.endContainer);
-    if(start === cursorNode) {
-      range.setStart(cursorParent, cursorpos)
-    }else {
-      if(start === cursorParent && range.startOffset > cursorpos) {
-        range.setStart(cursorParent, range.startOffset - 1)
+  this.getNodesInRange = getNodesInRange;
+  function mergeTextNodes(node1, node2) {
+    if(node1.nodeType === Node.TEXT_NODE) {
+      if(node1.length === 0) {
+        node1.parentNode.removeChild(node1)
+      }else {
+        if(node2.nodeType === Node.TEXT_NODE) {
+          node2.insertData(0, node1.data);
+          node1.parentNode.removeChild(node1);
+          return node2
+        }
       }
     }
-    if(range.endContainer === cursorNode) {
-      range.setEnd(cursorParent, cursorpos)
-    }else {
-      if(range.endContainer === cursorParent && range.endOffset > cursorpos) {
-        range.setEnd(cursorParent, range.endOffset - 1)
-      }
-    }
+    return node1
   }
-  function adaptRangeToMergedText(range, prev, textnodetomerge, cursorpos) {
-    var diff = prev.length - textnodetomerge.length;
-    if(range.startContainer === textnodetomerge) {
-      range.setStart(prev, diff + range.startOffset)
-    }else {
-      if(range.startContainer === prev.parentNode && range.startOffset === cursorpos) {
-        range.setStart(prev, diff)
-      }
+  function normalizeTextNodes(node) {
+    if(node && node.nextSibling) {
+      node = mergeTextNodes(node, node.nextSibling)
     }
-    if(range.endContainer === textnodetomerge) {
-      range.setEnd(prev, diff + range.endOffset)
-    }else {
-      if(range.endContainer === prev.parentNode && range.endOffset === cursorpos) {
-        range.setEnd(prev, diff)
-      }
+    if(node && node.previousSibling) {
+      mergeTextNodes(node.previousSibling, node)
     }
   }
-  function removeCursor() {
-    var i, cursorpos, node, textnodetoremove, range;
-    if(!cursorNode.parentNode) {
+  this.normalizeTextNodes = normalizeTextNodes;
+  function rangeContainsNode(limits, node) {
+    var range = node.ownerDocument.createRange(), nodeLength = node.nodeType === Node.TEXT_NODE ? node.length : node.childNodes.length, result;
+    range.setStart(limits.startContainer, limits.startOffset);
+    range.setEnd(limits.endContainer, limits.endOffset);
+    result = range.comparePoint(node, 0) === 0 && range.comparePoint(node, nodeLength) === 0;
+    range.detach();
+    return result
+  }
+  this.rangeContainsNode = rangeContainsNode;
+  function mergeIntoParent(targetNode) {
+    var parent = targetNode.parentNode;
+    while(targetNode.firstChild) {
+      parent.insertBefore(targetNode.firstChild, targetNode)
+    }
+    parent.removeChild(targetNode);
+    return parent
+  }
+  this.mergeIntoParent = mergeIntoParent;
+  function getElementsByTagNameNS(node, namespace, tagName) {
+    return Array.prototype.slice.call(node.getElementsByTagNameNS(namespace, tagName))
+  }
+  this.getElementsByTagNameNS = getElementsByTagNameNS;
+  function rangeIntersectsNode(range, node) {
+    var nodeLength = node.nodeType === Node.TEXT_NODE ? node.length : node.childNodes.length;
+    return range.comparePoint(node, 0) <= 0 && range.comparePoint(node, nodeLength) >= 0
+  }
+  this.rangeIntersectsNode = rangeIntersectsNode;
+  function containsNode(parent, descendant) {
+    return parent === descendant || parent.contains(descendant)
+  }
+  this.containsNode = containsNode;
+  function containsNodeForBrokenWebKit(parent, descendant) {
+    return parent === descendant || Boolean(parent.compareDocumentPosition(descendant) & Node.DOCUMENT_POSITION_CONTAINED_BY)
+  }
+  function init() {
+    var window = runtime.getWindow(), appVersion, webKitOrSafari;
+    if(window === null) {
       return
     }
-    cursorpos = 0;
-    node = cursorNode.parentNode.firstChild;
-    while(node && node !== cursorNode) {
-      cursorpos += 1;
-      node = node.nextSibling
+    appVersion = window.navigator.appVersion.toLowerCase();
+    webKitOrSafari = appVersion.indexOf("chrome") === -1 && (appVersion.indexOf("applewebkit") !== -1 || appVersion.indexOf("safari") !== -1);
+    if(webKitOrSafari) {
+      self.containsNode = containsNodeForBrokenWebKit
     }
-    if(cursorNode.previousSibling && cursorNode.previousSibling.nodeType === 3 && cursorNode.nextSibling && cursorNode.nextSibling.nodeType === 3) {
-      textnodetoremove = cursorNode.nextSibling;
-      cursorNode.previousSibling.appendData(textnodetoremove.nodeValue)
-    }
-    for(i = 0;i < selection.rangeCount;i += 1) {
-      removeCursorFromSelectionRange(selection.getRangeAt(i), cursorpos)
-    }
-    if(textnodetoremove) {
-      for(i = 0;i < selection.rangeCount;i += 1) {
-        adaptRangeToMergedText(selection.getRangeAt(i), cursorNode.previousSibling, textnodetoremove, cursorpos)
-      }
-      textnodetoremove.parentNode.removeChild(textnodetoremove)
-    }
-    cursorNode.parentNode.removeChild(cursorNode)
   }
-  function putCursor(container, offset) {
-    if(container.nodeType === 3) {
-      putCursorIntoTextNode(container, offset)
+  init()
+};
+runtime.loadClass("core.DomUtils");
+core.Cursor = function Cursor(document, memberId) {
+  var cursorns = "urn:webodf:names:cursor", cursorNode = document.createElementNS(cursorns, "cursor"), anchorNode = document.createElementNS(cursorns, "anchor"), forwardSelection, recentlyModifiedNodes = [], selectedRange, isCollapsed, domUtils = new core.DomUtils;
+  function putIntoTextNode(node, container, offset) {
+    runtime.assert(Boolean(container), "putCursorIntoTextNode: invalid container");
+    var parent = container.parentNode;
+    runtime.assert(Boolean(parent), "putCursorIntoTextNode: container without parent");
+    runtime.assert(offset >= 0 && offset <= container.length, "putCursorIntoTextNode: offset is out of bounds");
+    if(offset === 0) {
+      parent.insertBefore(node, container)
     }else {
-      if(container.nodeType !== 9) {
-        putCursorIntoContainer(container, offset)
+      if(offset === container.length) {
+        parent.insertBefore(node, container.nextSibling)
+      }else {
+        container.splitText(offset);
+        parent.insertBefore(node, container.nextSibling)
       }
     }
+  }
+  function putIntoContainer(node, container, offset) {
+    runtime.assert(Boolean(container), "putCursorIntoContainer: invalid container");
+    var n = container.firstChild;
+    while(n !== null && offset > 0) {
+      n = n.nextSibling;
+      offset -= 1
+    }
+    container.insertBefore(node, n)
+  }
+  function removeNode(node) {
+    if(node.parentNode) {
+      recentlyModifiedNodes.push(node.previousSibling);
+      recentlyModifiedNodes.push(node.nextSibling);
+      node.parentNode.removeChild(node)
+    }
+  }
+  function putNode(node, container, offset) {
+    var text, element;
+    if(container.nodeType === Node.TEXT_NODE) {
+      text = (container);
+      putIntoTextNode(node, text, offset)
+    }else {
+      if(container.nodeType === Node.ELEMENT_NODE) {
+        element = (container);
+        putIntoContainer(node, element, offset)
+      }
+    }
+    recentlyModifiedNodes.push(node.previousSibling);
+    recentlyModifiedNodes.push(node.nextSibling)
+  }
+  function getStartNode() {
+    return forwardSelection ? anchorNode : cursorNode
+  }
+  function getEndNode() {
+    return forwardSelection ? cursorNode : anchorNode
   }
   this.getNode = function() {
     return cursorNode
   };
-  this.updateToSelection = function() {
-    var range;
-    removeCursor();
-    if(selection.focusNode) {
-      putCursor(selection.focusNode, selection.focusOffset)
+  this.getAnchorNode = function() {
+    return anchorNode.parentNode ? anchorNode : cursorNode
+  };
+  this.getSelectedRange = function() {
+    if(isCollapsed) {
+      selectedRange.setStartBefore(cursorNode);
+      selectedRange.collapse(true)
+    }else {
+      selectedRange.setStartAfter(getStartNode());
+      selectedRange.setEndBefore(getEndNode())
     }
+    return selectedRange
+  };
+  this.setSelectedRange = function(range, isForwardSelection) {
+    if(selectedRange && selectedRange !== range) {
+      selectedRange.detach()
+    }
+    selectedRange = range;
+    forwardSelection = isForwardSelection !== false;
+    isCollapsed = range.collapsed;
+    if(range.collapsed) {
+      removeNode(anchorNode);
+      removeNode(cursorNode);
+      putNode(cursorNode, (range.startContainer), range.startOffset)
+    }else {
+      removeNode(anchorNode);
+      removeNode(cursorNode);
+      putNode(getEndNode(), (range.endContainer), range.endOffset);
+      putNode(getStartNode(), (range.startContainer), range.startOffset)
+    }
+    recentlyModifiedNodes.forEach(domUtils.normalizeTextNodes);
+    recentlyModifiedNodes.length = 0
   };
   this.remove = function() {
-    removeCursor()
+    removeNode(cursorNode);
+    recentlyModifiedNodes.forEach(domUtils.normalizeTextNodes);
+    recentlyModifiedNodes.length = 0
+  };
+  function init() {
+    cursorNode.setAttributeNS(cursorns, "memberId", memberId);
+    anchorNode.setAttributeNS(cursorns, "memberId", memberId)
   }
+  init()
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+core.EventNotifier = function EventNotifier(eventIds) {
+  var eventListener = {};
+  this.emit = function(eventId, args) {
+    var i, subscribers;
+    runtime.assert(eventListener.hasOwnProperty(eventId), 'unknown event fired "' + eventId + '"');
+    subscribers = eventListener[eventId];
+    for(i = 0;i < subscribers.length;i += 1) {
+      subscribers[i](args)
+    }
+  };
+  this.subscribe = function(eventId, cb) {
+    runtime.assert(eventListener.hasOwnProperty(eventId), 'tried to subscribe to unknown event "' + eventId + '"');
+    eventListener[eventId].push(cb);
+    runtime.log('event "' + eventId + '" subscribed.')
+  };
+  this.unsubscribe = function(eventId, cb) {
+    var cbIndex;
+    runtime.assert(eventListener.hasOwnProperty(eventId), 'tried to unsubscribe from unknown event "' + eventId + '"');
+    cbIndex = eventListener[eventId].indexOf(cb);
+    runtime.assert(cbIndex !== -1, 'tried to unsubscribe unknown callback from event "' + eventId + '"');
+    if(cbIndex !== -1) {
+      eventListener[eventId].splice(cbIndex, 1)
+    }
+    runtime.log('event "' + eventId + '" unsubscribed.')
+  };
+  function init() {
+    var i;
+    for(i = 0;i < eventIds.length;i += 1) {
+      eventListener[eventIds[i]] = []
+    }
+  }
+  init()
 };
 core.UnitTest = function UnitTest() {
 };
@@ -2935,8 +3311,21 @@ core.UnitTest.prototype.tests = function() {
 };
 core.UnitTest.prototype.asyncTests = function() {
 };
+core.UnitTest.provideTestAreaDiv = function() {
+  var maindoc = runtime.getWindow().document, testarea = maindoc.getElementById("testarea");
+  runtime.assert(!testarea, 'Unclean test environment, found a div with id "testarea".');
+  testarea = maindoc.createElement("div");
+  testarea.setAttribute("id", "testarea");
+  maindoc.body.appendChild(testarea);
+  return testarea
+};
+core.UnitTest.cleanupTestAreaDiv = function() {
+  var maindoc = runtime.getWindow().document, testarea = maindoc.getElementById("testarea");
+  runtime.assert(!!testarea && testarea.parentNode === maindoc.body, 'Test environment broken, found no div with id "testarea" below body.');
+  maindoc.body.removeChild(testarea)
+};
 core.UnitTestRunner = function UnitTestRunner() {
-  var failedTests = 0;
+  var failedTests = 0, areObjectsEqual;
   function debug(msg) {
     runtime.log(msg)
   }
@@ -2951,14 +3340,66 @@ core.UnitTestRunner = function UnitTestRunner() {
     var i;
     try {
       if(a.length !== b.length) {
+        testFailed("array of length " + a.length + " should be " + b.length + " long");
         return false
       }
       for(i = 0;i < a.length;i += 1) {
         if(a[i] !== b[i]) {
+          testFailed(a[i] + " should be " + b[i] + " at array index " + i);
           return false
         }
       }
     }catch(ex) {
+      return false
+    }
+    return true
+  }
+  function areAttributesEqual(a, b, skipReverseCheck) {
+    var aatts = a.attributes, n = aatts.length, i, att, v;
+    for(i = 0;i < n;i += 1) {
+      att = aatts.item(i);
+      if(att.prefix !== "xmlns") {
+        v = b.getAttributeNS(att.namespaceURI, att.localName);
+        if(!b.hasAttributeNS(att.namespaceURI, att.localName)) {
+          testFailed("Attribute " + att.localName + " with value " + att.value + " was not present");
+          return false
+        }
+        if(v !== att.value) {
+          testFailed("Attribute " + att.localName + " was " + v + " should be " + att.value);
+          return false
+        }
+      }
+    }
+    return skipReverseCheck ? true : areAttributesEqual(b, a, true)
+  }
+  function areNodesEqual(a, b) {
+    if(a.nodeType !== b.nodeType) {
+      testFailed(a.nodeType + " should be " + b.nodeType);
+      return false
+    }
+    if(a.nodeType === Node.TEXT_NODE) {
+      return a.data === b.data
+    }
+    runtime.assert(a.nodeType === Node.ELEMENT_NODE, "Only textnodes and elements supported.");
+    if(a.namespaceURI !== b.namespaceURI || a.localName !== b.localName) {
+      testFailed(a.namespaceURI + " should be " + b.namespaceURI);
+      return false
+    }
+    if(!areAttributesEqual(a, b, false)) {
+      return false
+    }
+    var an = a.firstChild, bn = b.firstChild;
+    while(an) {
+      if(!bn) {
+        return false
+      }
+      if(!areNodesEqual(an, bn)) {
+        return false
+      }
+      an = an.nextSibling;
+      bn = bn.nextSibling
+    }
+    if(bn) {
       return false
     }
     return true
@@ -2975,6 +3416,12 @@ core.UnitTestRunner = function UnitTestRunner() {
     }
     if(Object.prototype.toString.call(expected) === Object.prototype.toString.call([])) {
       return areArraysEqual(actual, expected)
+    }
+    if(typeof expected === "object" && typeof actual === "object") {
+      if(expected.constructor === Element || expected.constructor === Node) {
+        return areNodesEqual(expected, actual)
+      }
+      return areObjectsEqual(expected, actual)
     }
     return false
   }
@@ -3001,7 +3448,7 @@ core.UnitTestRunner = function UnitTestRunner() {
       if(isResultCorrect(av, bv)) {
         testPassed(a + " is " + b)
       }else {
-        if(typeof av === typeof bv) {
+        if(String(typeof av) === String(typeof bv)) {
           testFailed(a + " should be " + bv + ". Was " + stringify(av) + ".")
         }else {
           testFailed(a + " should be " + bv + " (of type " + typeof bv + "). Was " + av + " (of type " + typeof av + ").")
@@ -3029,6 +3476,20 @@ core.UnitTestRunner = function UnitTestRunner() {
   function shouldBeNull(t, a) {
     shouldBe(t, a, "null")
   }
+  areObjectsEqual = function(a, b) {
+    var akeys = Object.keys(a), bkeys = Object.keys(b);
+    akeys.sort();
+    bkeys.sort();
+    return areArraysEqual(akeys, bkeys) && Object.keys(a).every(function(key) {
+      var aval = a[key], bval = b[key];
+      if(!isResultCorrect(aval, bval)) {
+        testFailed(aval + " should be " + bval + " for key " + key);
+        return false
+      }
+      return true
+    })
+  };
+  this.areNodesEqual = areNodesEqual;
   this.shouldBeNull = shouldBeNull;
   this.shouldBeNonNull = shouldBeNonNull;
   this.shouldBe = shouldBe;
@@ -3038,18 +3499,32 @@ core.UnitTestRunner = function UnitTestRunner() {
 };
 core.UnitTester = function UnitTester() {
   var failedTests = 0, results = {};
-  this.runTests = function(TestClass, callback) {
-    var testName = Runtime.getFunctionName(TestClass), tname, runner = new core.UnitTestRunner, test = new TestClass(runner), testResults = {}, i, t, tests, lastFailCount;
-    if(testName.hasOwnProperty(results)) {
+  function link(text, code) {
+    return"<span style='color:blue;cursor:pointer' onclick='" + code + "'>" + text + "</span>"
+  }
+  this.runTests = function(TestClass, callback, testNames) {
+    var testName = Runtime.getFunctionName(TestClass), tname, runner = new core.UnitTestRunner, test = new TestClass(runner), testResults = {}, i, t, tests, lastFailCount, testNameString = "testName", inBrowser = runtime.type() === "BrowserRuntime";
+    if(results.hasOwnProperty(testName)) {
       runtime.log("Test " + testName + " has already run.");
       return
     }
-    runtime.log("Running " + testName + ": " + test.description());
+    if(inBrowser) {
+      runtime.log("<span>Running " + link(testName, 'runSuite("' + testName + '");') + ": " + test.description() + "</span>")
+    }else {
+      runtime.log("Running " + testName + ": " + test.description)
+    }
     tests = test.tests();
     for(i = 0;i < tests.length;i += 1) {
       t = tests[i];
-      tname = Runtime.getFunctionName(t);
-      runtime.log("Running " + tname);
+      tname = Runtime.getFunctionName(t) || t[testNameString];
+      if(testNames.length && testNames.indexOf(tname) === -1) {
+        continue
+      }
+      if(inBrowser) {
+        runtime.log("<span>Running " + link(tname, 'runTest("' + testName + '","' + tname + '")') + "</span>")
+      }else {
+        runtime.log("Running " + tname)
+      }
       lastFailCount = runner.countFailedTests();
       test.setUp();
       t();
@@ -3064,13 +3539,13 @@ core.UnitTester = function UnitTester() {
         return
       }
       t = todo[0];
-      var tname = Runtime.getFunctionName(t);
-      runtime.log("Running " + tname);
+      var fname = Runtime.getFunctionName(t);
+      runtime.log("Running " + fname);
       lastFailCount = runner.countFailedTests();
       test.setUp();
       t(function() {
         test.tearDown();
-        testResults[tname] = lastFailCount === runner.countFailedTests();
+        testResults[fname] = lastFailCount === runner.countFailedTests();
         runAsyncTests(todo.slice(1))
       })
     }
@@ -3083,128 +3558,269 @@ core.UnitTester = function UnitTester() {
     return results
   }
 };
-core.PointWalker = function PointWalker(node) {
-  var currentNode = node, before = null, after = node && node.firstChild, root = node, pos = 0;
-  function getPosition(node) {
-    var p = -1, n = node;
-    while(n) {
-      n = n.previousSibling;
-      p += 1
+core.PositionIterator = function PositionIterator(root, whatToShow, filter, expandEntityReferences) {
+  function EmptyTextNodeFilter() {
+    this.acceptNode = function(node) {
+      if(node.nodeType === Node.TEXT_NODE && node.length === 0) {
+        return NodeFilter.FILTER_REJECT
+      }
+      return NodeFilter.FILTER_ACCEPT
     }
-    return p
   }
-  this.setPoint = function(node, position) {
-    currentNode = node;
-    pos = position;
-    if(currentNode.nodeType === 3) {
-      after = null;
-      before = null
+  function FilteredEmptyTextNodeFilter(filter) {
+    this.acceptNode = function(node) {
+      if(node.nodeType === Node.TEXT_NODE && node.length === 0) {
+        return NodeFilter.FILTER_REJECT
+      }
+      return filter.acceptNode(node)
+    }
+  }
+  var self = this, walker, currentPos, nodeFilter;
+  this.nextPosition = function() {
+    if(walker.currentNode === root) {
+      return false
+    }
+    if(currentPos === 0 && walker.currentNode.nodeType === Node.ELEMENT_NODE) {
+      if(walker.firstChild() === null) {
+        currentPos = 1
+      }
     }else {
-      after = currentNode.firstChild;
-      while(position) {
-        position -= 1;
-        after = after.nextSibling
-      }
-      if(after) {
-        before = after.previousSibling
+      if(walker.currentNode.nodeType === Node.TEXT_NODE && currentPos + 1 < walker.currentNode.length) {
+        currentPos += 1
       }else {
-        before = currentNode.lastChild
-      }
-    }
-  };
-  this.stepForward = function() {
-    var len;
-    if(currentNode.nodeType === 3) {
-      if(typeof currentNode.nodeValue.length === "number") {
-        len = currentNode.nodeValue.length
-      }else {
-        len = currentNode.nodeValue.length()
-      }
-      if(pos < len) {
-        pos += 1;
-        return true
-      }
-    }
-    if(after) {
-      if(after.nodeType === 1) {
-        currentNode = after;
-        before = null;
-        after = currentNode.firstChild;
-        pos = 0
-      }else {
-        if(after.nodeType === 3) {
-          currentNode = after;
-          before = null;
-          after = null;
-          pos = 0
+        if(walker.nextSibling() !== null) {
+          currentPos = 0
         }else {
-          before = after;
-          after = after.nextSibling;
-          pos += 1
-        }
-      }
-      return true
-    }
-    if(currentNode !== root) {
-      before = currentNode;
-      after = before.nextSibling;
-      currentNode = currentNode.parentNode;
-      pos = getPosition(before) + 1;
-      return true
-    }
-    return false
-  };
-  this.stepBackward = function() {
-    if(currentNode.nodeType === 3) {
-      if(pos > 0) {
-        pos -= 1;
-        return true
-      }
-    }
-    if(before) {
-      if(before.nodeType === 1) {
-        currentNode = before;
-        before = currentNode.lastChild;
-        after = null;
-        pos = getPosition(before) + 1
-      }else {
-        if(before.nodeType === 3) {
-          currentNode = before;
-          before = null;
-          after = null;
-          if(typeof currentNode.nodeValue.length === "number") {
-            pos = currentNode.nodeValue.length
+          if(walker.parentNode()) {
+            currentPos = 1
           }else {
-            pos = currentNode.nodeValue.length()
+            return false
           }
-        }else {
-          after = before;
-          before = before.previousSibling;
-          pos -= 1
         }
+      }
+    }
+    return true
+  };
+  function setAtEnd() {
+    var type = walker.currentNode.nodeType;
+    if(type === Node.TEXT_NODE) {
+      currentPos = walker.currentNode.length - 1
+    }else {
+      currentPos = type === Node.ELEMENT_NODE ? 1 : 0
+    }
+  }
+  this.previousPosition = function() {
+    var moved = true;
+    if(currentPos === 0) {
+      if(walker.previousSibling() === null) {
+        if(!walker.parentNode() || walker.currentNode === root) {
+          walker.firstChild();
+          return false
+        }
+        currentPos = 0
+      }else {
+        setAtEnd()
+      }
+    }else {
+      if(walker.currentNode.nodeType === Node.TEXT_NODE) {
+        currentPos -= 1
+      }else {
+        if(walker.lastChild() !== null) {
+          setAtEnd()
+        }else {
+          if(walker.currentNode === root) {
+            moved = false
+          }else {
+            currentPos = 0
+          }
+        }
+      }
+    }
+    return moved
+  };
+  this.container = function() {
+    var n = walker.currentNode, t = n.nodeType;
+    if(currentPos === 0 && t !== Node.TEXT_NODE) {
+      return(n.parentNode)
+    }
+    return n
+  };
+  this.rightNode = function() {
+    var n = walker.currentNode, nodeType = n.nodeType;
+    if(nodeType === Node.TEXT_NODE && currentPos === n.length) {
+      n = n.nextSibling;
+      while(n && nodeFilter(n) !== 1) {
+        n = n.nextSibling
+      }
+    }else {
+      if(nodeType === Node.ELEMENT_NODE && currentPos === 1) {
+        n = null
+      }
+    }
+    return n
+  };
+  this.leftNode = function() {
+    var n = walker.currentNode;
+    if(currentPos === 0) {
+      n = n.previousSibling;
+      while(n && nodeFilter(n) !== 1) {
+        n = n.previousSibling
+      }
+    }else {
+      if(n.nodeType === Node.ELEMENT_NODE) {
+        n = n.lastChild;
+        while(n && nodeFilter(n) !== 1) {
+          n = n.previousSibling
+        }
+      }
+    }
+    return n
+  };
+  this.getCurrentNode = function() {
+    return walker.currentNode
+  };
+  this.domOffset = function() {
+    if(walker.currentNode.nodeType === Node.TEXT_NODE) {
+      return currentPos
+    }
+    var c = 0, startNode = walker.currentNode, n;
+    if(currentPos === 1) {
+      n = walker.lastChild()
+    }else {
+      n = walker.previousSibling()
+    }
+    while(n) {
+      c += 1;
+      n = walker.previousSibling()
+    }
+    walker.currentNode = startNode;
+    return c
+  };
+  this.unfilteredDomOffset = function() {
+    if(walker.currentNode.nodeType === Node.TEXT_NODE) {
+      return currentPos
+    }
+    var c = 0, n = walker.currentNode;
+    if(currentPos === 1) {
+      n = n.lastChild
+    }else {
+      n = n.previousSibling
+    }
+    while(n) {
+      c += 1;
+      n = n.previousSibling
+    }
+    return c
+  };
+  this.getPreviousSibling = function() {
+    var currentNode = walker.currentNode, sibling = walker.previousSibling();
+    walker.currentNode = currentNode;
+    return sibling
+  };
+  this.getNextSibling = function() {
+    var currentNode = walker.currentNode, sibling = walker.nextSibling();
+    walker.currentNode = currentNode;
+    return sibling
+  };
+  this.setUnfilteredPosition = function(container, offset) {
+    var filterResult;
+    runtime.assert(container !== null && container !== undefined, "PositionIterator.setUnfilteredPosition called without container");
+    walker.currentNode = container;
+    if(container.nodeType === Node.TEXT_NODE) {
+      currentPos = offset;
+      runtime.assert(offset <= container.length, "Error in setPosition: " + offset + " > " + container.length);
+      runtime.assert(offset >= 0, "Error in setPosition: " + offset + " < 0");
+      if(offset === container.length) {
+        currentPos = undefined;
+        if(walker.nextSibling()) {
+          currentPos = 0
+        }else {
+          if(walker.parentNode()) {
+            currentPos = 1
+          }
+        }
+        runtime.assert(currentPos !== undefined, "Error in setPosition: position not valid.")
       }
       return true
     }
-    if(currentNode !== root) {
-      after = currentNode;
-      before = after.previousSibling;
-      currentNode = currentNode.parentNode;
-      pos = getPosition(after);
-      return true
+    filterResult = nodeFilter(container);
+    if(offset < container.childNodes.length && filterResult !== NodeFilter.FILTER_REJECT) {
+      walker.currentNode = container.childNodes[offset];
+      filterResult = nodeFilter(walker.currentNode);
+      currentPos = 0
+    }else {
+      currentPos = offset === 0 ? 0 : 1
     }
-    return false
+    if(filterResult === NodeFilter.FILTER_REJECT) {
+      currentPos = 1
+    }
+    if(filterResult !== NodeFilter.FILTER_ACCEPT) {
+      return self.nextPosition()
+    }
+    runtime.assert(nodeFilter(walker.currentNode) === NodeFilter.FILTER_ACCEPT, "PositionIterater.setUnfilteredPosition call resulted in an non-visible node being set");
+    return true
   };
-  this.node = function() {
-    return currentNode
+  this.moveToEnd = function() {
+    walker.currentNode = root;
+    currentPos = 1
   };
-  this.position = function() {
-    return pos
+  this.moveToEndOfNode = function(node) {
+    if(node.nodeType === Node.TEXT_NODE) {
+      self.setUnfilteredPosition(node, node.length)
+    }else {
+      walker.currentNode = node;
+      currentPos = 1
+    }
   };
-  this.precedingSibling = function() {
-    return before
+  this.getNodeFilter = function() {
+    return nodeFilter
   };
-  this.followingSibling = function() {
-    return after
+  function init() {
+    var f;
+    if(filter) {
+      f = new FilteredEmptyTextNodeFilter(filter)
+    }else {
+      f = new EmptyTextNodeFilter
+    }
+    nodeFilter = (f.acceptNode);
+    nodeFilter.acceptNode = nodeFilter;
+    whatToShow = whatToShow || 4294967295;
+    walker = root.ownerDocument.createTreeWalker(root, whatToShow, nodeFilter, expandEntityReferences);
+    currentPos = 0;
+    if(walker.firstChild() === null) {
+      currentPos = 1
+    }
+  }
+  init()
+};
+runtime.loadClass("core.PositionIterator");
+core.PositionFilter = function PositionFilter() {
+};
+core.PositionFilter.FilterResult = {FILTER_ACCEPT:1, FILTER_REJECT:2, FILTER_SKIP:3};
+core.PositionFilter.prototype.acceptPosition = function(point) {
+};
+(function() {
+  return core.PositionFilter
+})();
+runtime.loadClass("core.PositionFilter");
+core.PositionFilterChain = function PositionFilterChain() {
+  var filterChain = {}, FILTER_ACCEPT = core.PositionFilter.FilterResult.FILTER_ACCEPT, FILTER_REJECT = core.PositionFilter.FilterResult.FILTER_REJECT;
+  this.acceptPosition = function(iterator) {
+    var filterName;
+    for(filterName in filterChain) {
+      if(filterChain.hasOwnProperty(filterName)) {
+        if(filterChain[filterName].acceptPosition(iterator) === FILTER_REJECT) {
+          return FILTER_REJECT
+        }
+      }
+    }
+    return FILTER_ACCEPT
+  };
+  this.addFilter = function(filterName, filterInstance) {
+    filterChain[filterName] = filterInstance
+  };
+  this.removeFilter = function(filterName) {
+    delete filterChain[filterName]
   }
 };
 core.Async = function Async() {
@@ -3228,6 +3844,14 @@ core.Async = function Async() {
     }
   }
 };
+/*
+
+ WebODF
+ Copyright (c) 2010 Jos van den Oever
+ Licensed under the ... License:
+
+ Project home: http://www.webodf.org/
+*/
 runtime.loadClass("core.RawInflate");
 runtime.loadClass("core.ByteArray");
 runtime.loadClass("core.ByteArrayWriter");
@@ -3259,26 +3883,26 @@ core.Zip = function Zip(url, entriesReadCallback) {
     return y < 1980 ? 0 : y - 1980 << 25 | date.getMonth() + 1 << 21 | date.getDate() << 16 | date.getHours() << 11 | date.getMinutes() << 5 | date.getSeconds() >> 1
   }
   function ZipEntry(url, stream) {
-    var sig, namelen, extralen, commentlen, compressionMethod, compressedSize, uncompressedSize, offset, crc, entry = this;
+    var sig, namelen, extralen, commentlen, compressionMethod, compressedSize, uncompressedSize, offset, entry = this;
     function handleEntryData(data, callback) {
-      var stream = new core.ByteArray(data), sig = stream.readUInt32LE(), filenamelen, extralen;
-      if(sig !== 67324752) {
-        callback("File entry signature is wrong." + sig.toString() + " " + data.length.toString(), null);
+      var estream = new core.ByteArray(data), esig = estream.readUInt32LE(), filenamelen, eextralen;
+      if(esig !== 67324752) {
+        callback("File entry signature is wrong." + esig.toString() + " " + data.length.toString(), null);
         return
       }
-      stream.pos += 22;
-      filenamelen = stream.readUInt16LE();
-      extralen = stream.readUInt16LE();
-      stream.pos += filenamelen + extralen;
+      estream.pos += 22;
+      filenamelen = estream.readUInt16LE();
+      eextralen = estream.readUInt16LE();
+      estream.pos += filenamelen + eextralen;
       if(compressionMethod) {
-        data = data.slice(stream.pos, stream.pos + compressedSize);
+        data = data.slice(estream.pos, estream.pos + compressedSize);
         if(compressedSize !== data.length) {
           callback("The amount of compressed bytes read was " + data.length.toString() + " instead of " + compressedSize.toString() + " for " + entry.filename + " in " + url + ".", null);
           return
         }
         data = inflate(data, uncompressedSize)
       }else {
-        data = data.slice(stream.pos, stream.pos + uncompressedSize)
+        data = data.slice(estream.pos, estream.pos + uncompressedSize)
       }
       if(uncompressedSize !== data.length) {
         callback("The amount of bytes read was " + data.length.toString() + " instead of " + uncompressedSize.toString() + " for " + entry.filename + " in " + url + ".", null);
@@ -3297,7 +3921,7 @@ core.Zip = function Zip(url, entriesReadCallback) {
         size = filesize - offset
       }
       runtime.read(url, offset, size, function(err, data) {
-        if(err) {
+        if(err || data === null) {
           callback(err, data)
         }else {
           handleEntryData(data, callback)
@@ -3324,7 +3948,7 @@ core.Zip = function Zip(url, entriesReadCallback) {
     stream.pos += 6;
     compressionMethod = stream.readUInt16LE();
     this.date = dosTime2Date(stream.readUInt32LE());
-    crc = stream.readUInt32LE();
+    stream.readUInt32LE();
     compressedSize = stream.readUInt32LE();
     uncompressedSize = stream.readUInt32LE();
     namelen = stream.readUInt16LE();
@@ -3379,11 +4003,15 @@ core.Zip = function Zip(url, entriesReadCallback) {
     cdsOffset = stream.readUInt16LE();
     cdsOffset = filesize - 22 - cdsSize;
     runtime.read(url, cdsOffset, filesize - cdsOffset, function(err, data) {
-      handleCentralDirectory(data, callback)
+      if(err || data === null) {
+        callback(err, zip)
+      }else {
+        handleCentralDirectory(data, callback)
+      }
     })
   }
   function load(filename, callback) {
-    var entry = null, end = filesize, e, i;
+    var entry = null, e, i;
     for(i = 0;i < entries.length;i += 1) {
       e = entries[i];
       if(e.filename === filename) {
@@ -3403,15 +4031,15 @@ core.Zip = function Zip(url, entriesReadCallback) {
   }
   function loadAsString(filename, callback) {
     load(filename, function(err, data) {
-      if(err) {
+      if(err || data === null) {
         return callback(err, null)
       }
-      data = runtime.byteArrayToString(data, "utf8");
-      callback(null, data)
+      var d = runtime.byteArrayToString(data, "utf8");
+      callback(null, d)
     })
   }
   function loadContentXmlAsFragments(filename, handler) {
-    loadAsString(filename, function(err, data) {
+    zip.loadAsString(filename, function(err, data) {
       if(err) {
         return handler.rootElementReady(err)
       }
@@ -3423,7 +4051,7 @@ core.Zip = function Zip(url, entriesReadCallback) {
       if(err) {
         return callback(err, null)
       }
-      var p = data, chunksize = 45E3, i = 0, url;
+      var p = data, chunksize = 45E3, i = 0, dataurl;
       if(!mimetype) {
         if(p[1] === 80 && p[2] === 78 && p[3] === 71) {
           mimetype = "image/png"
@@ -3439,23 +4067,22 @@ core.Zip = function Zip(url, entriesReadCallback) {
           }
         }
       }
-      url = "data:" + mimetype + ";base64,";
+      dataurl = "data:" + mimetype + ";base64,";
       while(i < data.length) {
-        url += base64.convertUTF8ArrayToBase64(p.slice(i, Math.min(i + chunksize, p.length)));
+        dataurl += base64.convertUTF8ArrayToBase64(p.slice(i, Math.min(i + chunksize, p.length)));
         i += chunksize
       }
-      callback(null, url)
+      callback(null, dataurl)
     })
   }
   function loadAsDOM(filename, callback) {
-    loadAsString(filename, function(err, xmldata) {
-      if(err) {
+    zip.loadAsString(filename, function(err, xmldata) {
+      if(err || xmldata === null) {
         callback(err, null);
         return
       }
-      var parser = new DOMParser;
-      xmldata = parser.parseFromString(xmldata, "text/xml");
-      callback(null, xmldata)
+      var parser = new DOMParser, dom = parser.parseFromString(xmldata, "text/xml");
+      callback(null, dom)
     })
   }
   function save(filename, data, compressed, date) {
@@ -3523,10 +4150,10 @@ core.Zip = function Zip(url, entriesReadCallback) {
       loadAllEntries(position + 1, callback)
     })
   }
-  function write(callback) {
+  function createByteArray(successCallback, errorCallback) {
     loadAllEntries(0, function(err) {
       if(err) {
-        callback(err);
+        errorCallback(err);
         return
       }
       var data = new core.ByteArrayWriter("utf8"), i, e, codoffset, codsize, offsets = [0];
@@ -3546,12 +4173,22 @@ core.Zip = function Zip(url, entriesReadCallback) {
       data.appendUInt32LE(codsize);
       data.appendUInt32LE(codoffset);
       data.appendArray([0, 0]);
-      runtime.writeFile(url, data.getByteArray(), callback)
+      successCallback(data.getByteArray())
     })
+  }
+  function writeAs(newurl, callback) {
+    createByteArray(function(data) {
+      runtime.writeFile(newurl, data, callback)
+    }, callback)
+  }
+  function write(callback) {
+    writeAs(url, callback)
   }
   this.load = load;
   this.save = save;
   this.write = write;
+  this.writeAs = writeAs;
+  this.createByteArray = createByteArray;
   this.loadContentXmlAsFragments = loadContentXmlAsFragments;
   this.loadAsString = loadAsString;
   this.loadAsDOM = loadAsDOM;
@@ -3570,7 +4207,7 @@ core.Zip = function Zip(url, entriesReadCallback) {
       entriesReadCallback("File '" + url + "' cannot be read.", zip)
     }else {
       runtime.read(url, filesize - 22, 22, function(err, data) {
-        if(err || entriesReadCallback === null) {
+        if(err || entriesReadCallback === null || data === null) {
           entriesReadCallback(err, zip)
         }else {
           handleCentralDirectoryEnd(data, entriesReadCallback)
@@ -3578,6 +4215,26 @@ core.Zip = function Zip(url, entriesReadCallback) {
       })
     }
   })
+};
+core.CSSUnits = function CSSUnits() {
+  var sizemap = {"in":1, "cm":2.54, "mm":25.4, "pt":72, "pc":12};
+  this.convert = function(value, oldUnit, newUnit) {
+    return value * sizemap[newUnit] / sizemap[oldUnit]
+  };
+  this.convertMeasure = function(measure, newUnit) {
+    var value, oldUnit, newMeasure;
+    if(measure && newUnit) {
+      value = parseFloat(measure);
+      oldUnit = measure.replace(value.toString(), "");
+      newMeasure = this.convert(value, oldUnit, newUnit)
+    }else {
+      newMeasure = ""
+    }
+    return newMeasure.toString()
+  };
+  this.getUnits = function(measure) {
+    return measure.substr(measure.length - 2, measure.length)
+  }
 };
 xmldom.LSSerializerFilter = function LSSerializerFilter() {
 };
@@ -3591,100 +4248,127 @@ if(typeof Object.create !== "function") {
 }
 xmldom.LSSerializer = function LSSerializer() {
   var self = this;
-  function serializeAttribute(prefix, attr) {
-    var s = prefix + attr.localName + '="' + attr.nodeValue + '"';
+  function Namespaces(nsmap) {
+    function invertMap(map) {
+      var m = {}, i;
+      for(i in map) {
+        if(map.hasOwnProperty(i)) {
+          m[map[i]] = i
+        }
+      }
+      return m
+    }
+    var current = nsmap || {}, currentrev = invertMap(nsmap), levels = [current], levelsrev = [currentrev], level = 0;
+    this.push = function() {
+      level += 1;
+      current = levels[level] = Object.create(current);
+      currentrev = levelsrev[level] = Object.create(currentrev)
+    };
+    this.pop = function() {
+      levels[level] = undefined;
+      levelsrev[level] = undefined;
+      level -= 1;
+      current = levels[level];
+      currentrev = levelsrev[level]
+    };
+    this.getLocalNamespaceDefinitions = function() {
+      return currentrev
+    };
+    this.getQName = function(node) {
+      var ns = node.namespaceURI, i = 0, p;
+      if(!ns) {
+        return node.localName
+      }
+      p = currentrev[ns];
+      if(p) {
+        return p + ":" + node.localName
+      }
+      do {
+        if(p || !node.prefix) {
+          p = "ns" + i;
+          i += 1
+        }else {
+          p = node.prefix
+        }
+        if(current[p] === ns) {
+          break
+        }
+        if(!current[p]) {
+          current[p] = ns;
+          currentrev[ns] = p;
+          break
+        }
+        p = null
+      }while(p === null);
+      return p + ":" + node.localName
+    }
+  }
+  function escapeContent(value) {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/'/g, "&apos;").replace(/"/g, "&quot;")
+  }
+  function serializeAttribute(qname, attr) {
+    var escapedValue = typeof attr.value === "string" ? escapeContent(attr.value) : attr.value, s = qname + '="' + escapedValue + '"';
     return s
   }
-  function attributePrefix(nsmap, prefix, ns) {
-    if(nsmap.hasOwnProperty(ns)) {
-      return nsmap[ns] + ":"
-    }
-    if(nsmap[ns] !== prefix) {
-      nsmap[ns] = prefix
-    }
-    return prefix + ":"
-  }
-  function startNode(nsmap, node) {
-    var s = "", atts = node.attributes, length, i, attr, attstr = "", accept, prefix;
-    if(atts) {
-      if(nsmap[node.namespaceURI] !== node.prefix) {
-        nsmap[node.namespaceURI] = node.prefix
+  function startElement(ns, qname, element) {
+    var s = "", atts = element.attributes, length, i, attr, attstr = "", accept, prefix, nsmap;
+    s += "<" + qname;
+    length = atts.length;
+    for(i = 0;i < length;i += 1) {
+      attr = (atts.item(i));
+      if(attr.namespaceURI !== "http://www.w3.org/2000/xmlns/") {
+        accept = self.filter ? self.filter.acceptNode(attr) : NodeFilter.FILTER_ACCEPT;
+        if(accept === NodeFilter.FILTER_ACCEPT) {
+          attstr += " " + serializeAttribute(ns.getQName(attr), attr)
+        }
       }
-      s += "<" + node.nodeName;
-      length = atts.length;
-      for(i = 0;i < length;i += 1) {
-        attr = atts.item(i);
-        if(attr.namespaceURI !== "http://www.w3.org/2000/xmlns/") {
-          accept = self.filter ? self.filter.acceptNode(attr) : 1;
-          if(accept === 1) {
-            if(attr.namespaceURI) {
-              prefix = attributePrefix(nsmap, attr.prefix, attr.namespaceURI)
-            }else {
-              prefix = ""
-            }
-            attstr += " " + serializeAttribute(prefix, attr)
+    }
+    nsmap = ns.getLocalNamespaceDefinitions();
+    for(i in nsmap) {
+      if(nsmap.hasOwnProperty(i)) {
+        prefix = nsmap[i];
+        if(!prefix) {
+          s += ' xmlns="' + i + '"'
+        }else {
+          if(prefix !== "xmlns") {
+            s += " xmlns:" + nsmap[i] + '="' + i + '"'
           }
         }
       }
-      for(i in nsmap) {
-        if(nsmap.hasOwnProperty(i)) {
-          prefix = nsmap[i];
-          if(!prefix) {
-            s += ' xmlns="' + i + '"'
-          }else {
-            if(prefix !== "xmlns") {
-              s += " xmlns:" + nsmap[i] + '="' + i + '"'
-            }
-          }
-        }
-      }
-      s += attstr + ">"
     }
+    s += attstr + ">";
     return s
   }
-  function endNode(node) {
-    var s = "";
-    if(node.nodeType === 1) {
-      s += "</" + node.nodeName + ">"
+  function serializeNode(ns, node) {
+    var s = "", accept = self.filter ? self.filter.acceptNode(node) : NodeFilter.FILTER_ACCEPT, child, qname;
+    if(accept === NodeFilter.FILTER_ACCEPT && node.nodeType === Node.ELEMENT_NODE) {
+      ns.push();
+      qname = ns.getQName(node);
+      s += startElement(ns, qname, node)
     }
-    return s
-  }
-  function serializeNode(parentnsmap, node) {
-    var s = "", nsmap = Object.create(parentnsmap), accept = self.filter ? self.filter.acceptNode(node) : 1, child;
-    if(accept === 1) {
-      s += startNode(nsmap, node)
-    }
-    if(accept === 1 || accept === 3) {
+    if(accept === NodeFilter.FILTER_ACCEPT || accept === NodeFilter.FILTER_SKIP) {
       child = node.firstChild;
       while(child) {
-        s += serializeNode(nsmap, child);
+        s += serializeNode(ns, child);
         child = child.nextSibling
       }
       if(node.nodeValue) {
-        s += node.nodeValue
+        s += escapeContent(node.nodeValue)
       }
     }
-    if(accept === 1) {
-      s += endNode(node)
+    if(qname) {
+      s += "</" + qname + ">";
+      ns.pop()
     }
     return s
-  }
-  function invertMap(map) {
-    var m = {}, i;
-    for(i in map) {
-      if(map.hasOwnProperty(i)) {
-        m[map[i]] = i
-      }
-    }
-    return m
   }
   this.filter = null;
   this.writeToString = function(node, nsmap) {
     if(!node) {
       return""
     }
-    nsmap = nsmap ? invertMap(nsmap) : {};
-    return serializeNode(nsmap, node)
+    var ns = new Namespaces(nsmap);
+    return serializeNode(ns, node)
   }
 };
 xmldom.RelaxNGParser = function RelaxNGParser() {
@@ -3724,12 +4408,14 @@ xmldom.RelaxNGParser = function RelaxNGParser() {
     return r
   }
   function splitQNames(def) {
-    var i, l = def.names ? def.names.length : 0, name, localnames = def.localnames = [l], namespaces = def.namespaces = [l];
+    var i, l = def.names ? def.names.length : 0, name, localnames = [], namespaces = [];
     for(i = 0;i < l;i += 1) {
       name = splitQName(def.names[i]);
       namespaces[i] = name[0];
       localnames[i] = name[1]
     }
+    def.localnames = localnames;
+    def.namespaces = namespaces
   }
   function trim(str) {
     str = str.replace(/^\s\s*/, "");
@@ -3762,7 +4448,7 @@ xmldom.RelaxNGParser = function RelaxNGParser() {
   function parseChildren(c, e, elements, names) {
     var text = "", ce;
     while(c) {
-      if(c.nodeType === 1 && c.namespaceURI === rngns) {
+      if(c.nodeType === Node.ELEMENT_NODE && c.namespaceURI === rngns) {
         ce = parse(c, elements, e);
         if(ce) {
           if(ce.name === "name") {
@@ -3779,7 +4465,7 @@ xmldom.RelaxNGParser = function RelaxNGParser() {
           }
         }
       }else {
-        if(c.nodeType === 3) {
+        if(c.nodeType === Node.TEXT_NODE) {
           text += c.nodeValue
         }
       }
@@ -3958,7 +4644,7 @@ xmldom.RelaxNGParser = function RelaxNGParser() {
     }
   }
   function resolveElements(def, elements) {
-    var i = 0, e, name;
+    var i = 0, e;
     while(def.e && i < def.e.length) {
       e = def.e[i];
       if(e.name === "elementref") {
@@ -4026,7 +4712,7 @@ xmldom.RelaxNG = function RelaxNG() {
     return notAllowed
   }, startTagOpenDeriv:function() {
     return notAllowed
-  }, attDeriv:function(context, attribute) {
+  }, attDeriv:function() {
     return notAllowed
   }, startTagCloseDeriv:function() {
     return empty
@@ -4305,7 +4991,7 @@ xmldom.RelaxNG = function RelaxNG() {
         return createAfter(p, empty)
       }
       return notAllowed
-    }, attDeriv:function(context, attribute) {
+    }, attDeriv:function() {
       return notAllowed
     }, startTagCloseDeriv:function() {
       return this
@@ -4325,7 +5011,7 @@ xmldom.RelaxNG = function RelaxNG() {
     }}
   });
   function createList() {
-    return{type:"list", nullable:false, hash:"list", textDeriv:function(context, text) {
+    return{type:"list", nullable:false, hash:"list", textDeriv:function() {
       return empty
     }}
   }
@@ -4347,9 +5033,6 @@ xmldom.RelaxNG = function RelaxNG() {
       return this
     }}
   });
-  function createDataExcept() {
-    return{type:"dataExcept", nullable:false, hash:"dataExcept"}
-  }
   applyAfter = function applyAfter(f, p) {
     var result;
     if(p.type === "after") {
@@ -4385,14 +5068,13 @@ xmldom.RelaxNG = function RelaxNG() {
     return a
   }
   function childrenDeriv(context, pattern, walker) {
-    var element = walker.currentNode, childNode = walker.firstChild(), numberOfTextNodes = 0, childNodes = [], i, p;
+    var element = walker.currentNode, childNode = walker.firstChild(), childNodes = [], i, p;
     while(childNode) {
-      if(childNode.nodeType === 1) {
+      if(childNode.nodeType === Node.ELEMENT_NODE) {
         childNodes.push(childNode)
       }else {
-        if(childNode.nodeType === 3 && !/^\s*$/.test(childNode.nodeValue)) {
-          childNodes.push(childNode.nodeValue);
-          numberOfTextNodes += 1
+        if(childNode.nodeType === Node.TEXT_NODE && !/^\s*$/.test(childNode.nodeValue)) {
+          childNodes.push(childNode.nodeValue)
         }
       }
       childNode = walker.nextSibling()
@@ -4458,9 +5140,9 @@ xmldom.RelaxNG = function RelaxNG() {
           hash += "{" + ns[i] + "}" + name[i] + ","
         }
         result = {hash:hash, contains:function(node) {
-          var i;
-          for(i = 0;i < name.length;i += 1) {
-            if(name[i] === node.localName && ns[i] === node.namespaceURI) {
+          var j;
+          for(j = 0;j < name.length;j += 1) {
+            if(name[j] === node.localName && ns[j] === node.namespaceURI) {
               return true
             }
           }
@@ -4557,11 +5239,11 @@ xmldom.RelaxNG = function RelaxNG() {
 };
 runtime.loadClass("xmldom.RelaxNGParser");
 xmldom.RelaxNG2 = function RelaxNG2() {
-  var start, validateNonEmptyPattern, nsmap, depth = 0, p = "                                                                ";
+  var start, validateNonEmptyPattern, nsmap;
   function RelaxNGParseError(error, context) {
     this.message = function() {
       if(context) {
-        error += context.nodeType === 1 ? " Element " : " Node ";
+        error += context.nodeType === Node.ELEMENT_NODE ? " Element " : " Node ";
         error += context.nodeName;
         if(context.nodeValue) {
           error += " with value '" + context.nodeValue + "'"
@@ -4588,7 +5270,7 @@ xmldom.RelaxNG2 = function RelaxNG2() {
     return nsmap[node.namespaceURI] + ":" + node.localName
   }
   function isWhitespace(node) {
-    return node && node.nodeType === 3 && /^\s+$/.test(node.nodeValue)
+    return node && node.nodeType === Node.TEXT_NODE && /^\s+$/.test(node.nodeValue)
   }
   function validatePattern(elementdef, walker, element, data) {
     if(elementdef.name === "empty") {
@@ -4619,45 +5301,38 @@ xmldom.RelaxNG2 = function RelaxNG2() {
   function validateTop(elementdef, walker, element) {
     return validatePattern(elementdef, walker, element)
   }
-  function validateElement(elementdef, walker, element) {
+  function validateElement(elementdef, walker) {
     if(elementdef.e.length !== 2) {
       throw"Element with wrong # of elements: " + elementdef.e.length;
     }
-    depth += 1;
     var node = walker.currentNode, type = node ? node.nodeType : 0, error = null;
-    while(type > 1) {
-      if(type !== 8 && (type !== 3 || !/^\s+$/.test(walker.currentNode.nodeValue))) {
-        depth -= 1;
+    while(type > Node.ELEMENT_NODE) {
+      if(type !== Node.COMMENT_NODE && (type !== Node.TEXT_NODE || !/^\s+$/.test(walker.currentNode.nodeValue))) {
         return[new RelaxNGParseError("Not allowed node of type " + type + ".")]
       }
       node = walker.nextSibling();
       type = node ? node.nodeType : 0
     }
     if(!node) {
-      depth -= 1;
       return[new RelaxNGParseError("Missing element " + elementdef.names)]
     }
     if(elementdef.names && elementdef.names.indexOf(qName(node)) === -1) {
-      depth -= 1;
       return[new RelaxNGParseError("Found " + node.nodeName + " instead of " + elementdef.names + ".", node)]
     }
     if(walker.firstChild()) {
       error = validateTop(elementdef.e[1], walker, node);
       while(walker.nextSibling()) {
         type = walker.currentNode.nodeType;
-        if(!isWhitespace(walker.currentNode) && type !== 8) {
-          depth -= 1;
+        if(!isWhitespace(walker.currentNode) && type !== Node.COMMENT_NODE) {
           return[new RelaxNGParseError("Spurious content.", walker.currentNode)]
         }
       }
       if(walker.parentNode() !== node) {
-        depth -= 1;
         return[new RelaxNGParseError("Implementation error.")]
       }
     }else {
       error = validateTop(elementdef.e[1], walker, node)
     }
-    depth -= 1;
     node = walker.nextSibling();
     return error
   }
@@ -4733,7 +5408,7 @@ xmldom.RelaxNG2 = function RelaxNG2() {
     return validateNonEmptyPattern(elementdef.e[0], walker, element) || validateNonEmptyPattern(elementdef.e[1], walker, element)
   }
   function validateText(elementdef, walker, element) {
-    var node = walker.currentNode, type = node ? node.nodeType : 0, error = null;
+    var node = walker.currentNode, type = node ? node.nodeType : 0;
     while(node !== element && type !== 3) {
       if(type === 1) {
         return[new RelaxNGParseError("Element not allowed here.", node)]
@@ -4764,7 +5439,7 @@ xmldom.RelaxNG2 = function RelaxNG2() {
               err = validateAttribute(elementdef, walker, element)
             }else {
               if(name === "element") {
-                err = validateElement(elementdef, walker, element)
+                err = validateElement(elementdef, walker)
               }else {
                 if(name === "oneOrMore") {
                   err = validateOneOrMore(elementdef, walker, element)
@@ -4801,59 +5476,7 @@ xmldom.RelaxNG2 = function RelaxNG2() {
     nsmap = nsmap1
   }
 };
-xmldom.OperationalTransformInterface = function() {
-};
-xmldom.OperationalTransformInterface.prototype.retain = function(amount) {
-};
-xmldom.OperationalTransformInterface.prototype.insertCharacters = function(chars) {
-};
-xmldom.OperationalTransformInterface.prototype.insertElementStart = function(tagname, attributes) {
-};
-xmldom.OperationalTransformInterface.prototype.insertElementEnd = function() {
-};
-xmldom.OperationalTransformInterface.prototype.deleteCharacters = function(amount) {
-};
-xmldom.OperationalTransformInterface.prototype.deleteElementStart = function() {
-};
-xmldom.OperationalTransformInterface.prototype.deleteElementEnd = function() {
-};
-xmldom.OperationalTransformInterface.prototype.replaceAttributes = function(atts) {
-};
-xmldom.OperationalTransformInterface.prototype.updateAttributes = function(atts) {
-};
-xmldom.OperationalTransformDOM = function OperationalTransformDOM(root, serializer) {
-  var pos, length;
-  function retain(amount) {
-  }
-  function insertCharacters(chars) {
-  }
-  function insertElementStart(tagname, attributes) {
-  }
-  function insertElementEnd() {
-  }
-  function deleteCharacters(amount) {
-  }
-  function deleteElementStart() {
-  }
-  function deleteElementEnd() {
-  }
-  function replaceAttributes(atts) {
-  }
-  function updateAttributes(atts) {
-  }
-  function atEnd() {
-    return pos === length
-  }
-  this.retain = retain;
-  this.insertCharacters = insertCharacters;
-  this.insertElementStart = insertElementStart;
-  this.insertElementEnd = insertElementEnd;
-  this.deleteCharacters = deleteCharacters;
-  this.deleteElementStart = deleteElementStart;
-  this.deleteElementEnd = deleteElementEnd;
-  this.replaceAttributes = replaceAttributes;
-  this.updateAttributes = updateAttributes;
-  this.atEnd = atEnd
+xmldom.XPathIterator = function XPathIterator() {
 };
 xmldom.XPath = function() {
   var createXPathPathIterator, parsePredicates;
@@ -4861,7 +5484,7 @@ xmldom.XPath = function() {
     return a !== -1 && (a < b || b === -1) && (a < c || c === -1)
   }
   function parseXPathStep(xpath, pos, end, steps) {
-    var location = "", predicates = [], value, brapos = xpath.indexOf("[", pos), slapos = xpath.indexOf("/", pos), eqpos = xpath.indexOf("=", pos), depth = 0, start = 0;
+    var location = "", predicates = [], brapos = xpath.indexOf("[", pos), slapos = xpath.indexOf("/", pos), eqpos = xpath.indexOf("=", pos);
     if(isSmallestPositive(slapos, brapos, eqpos)) {
       location = xpath.substring(pos, slapos);
       pos = slapos + 1
@@ -4893,7 +5516,7 @@ xmldom.XPath = function() {
         }else {
           try {
             value = parseInt(value, 10)
-          }catch(e) {
+          }catch(ignore) {
           }
         }
         p = end
@@ -4902,7 +5525,7 @@ xmldom.XPath = function() {
     return{steps:steps, value:value}
   }
   parsePredicates = function parsePredicates(xpath, start, predicates) {
-    var pos = start, l = xpath.length, selector, depth = 0;
+    var pos = start, l = xpath.length, depth = 0;
     while(pos < l) {
       if(xpath[pos] === "]") {
         depth -= 1;
@@ -4921,13 +5544,11 @@ xmldom.XPath = function() {
     }
     return pos
   };
-  function XPathIterator() {
-  }
-  XPathIterator.prototype.next = function() {
+  xmldom.XPathIterator.prototype.next = function() {
   };
-  XPathIterator.prototype.reset = function() {
+  xmldom.XPathIterator.prototype.reset = function() {
   };
-  function NodeIterator() {
+  function XPathNodeIterator() {
     var node, done = false;
     this.setNode = function setNode(n) {
       node = n
@@ -4946,7 +5567,7 @@ xmldom.XPath = function() {
       it.reset()
     };
     this.next = function next() {
-      var node = it.next(), attr;
+      var node = it.next();
       while(node) {
         node = node.getAttributeNodeNS(namespace, localName);
         if(node) {
@@ -4987,7 +5608,7 @@ xmldom.XPath = function() {
             }
           }while(root && !node)
         }
-        if(node && node.nodeType === 1) {
+        if(node && node.nodeType === Node.ELEMENT_NODE) {
           return node
         }
       }
@@ -5013,7 +5634,7 @@ xmldom.XPath = function() {
     })
   }
   function createPredicateFilteredIterator(it, p, namespaceResolver) {
-    var nit = new NodeIterator, pit = createXPathPathIterator(nit, p, namespaceResolver), value = p.value;
+    var nit = new XPathNodeIterator, pit = createXPathPathIterator(nit, p, namespaceResolver), value = p.value;
     if(value === undefined) {
       return new ConditionIterator(it, function(node) {
         nit.setNode(node);
@@ -5029,7 +5650,7 @@ xmldom.XPath = function() {
     })
   }
   createXPathPathIterator = function createXPathPathIterator(it, xpath, namespaceResolver) {
-    var i, j, step, location, namespace, localName, prefix, p;
+    var i, j, step, location, p;
     for(i = 0;i < xpath.steps.length;i += 1) {
       step = xpath.steps[i];
       location = step.location;
@@ -5056,7 +5677,7 @@ xmldom.XPath = function() {
     return it
   };
   function fallback(node, xpath, namespaceResolver) {
-    var it = new NodeIterator, i, nodelist, parsedXPath, pos;
+    var it = new XPathNodeIterator, i, nodelist, parsedXPath;
     it.setNode(node);
     parsedXPath = parseXPath(xpath);
     it = createXPathPathIterator(it, parsedXPath, namespaceResolver);
@@ -5070,13 +5691,13 @@ xmldom.XPath = function() {
   }
   function getODFElementsWithXPath(node, xpath, namespaceResolver) {
     var doc = node.ownerDocument, nodes, elements = [], n = null;
-    if(!doc || !doc.evaluate || !n) {
+    if(!doc || !doc.evaluate) {
       elements = fallback(node, xpath, namespaceResolver)
     }else {
       nodes = doc.evaluate(xpath, node, namespaceResolver, XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null);
       n = nodes.iterateNext();
       while(n !== null) {
-        if(n.nodeType === 1) {
+        if(n.nodeType === Node.ELEMENT_NODE) {
           elements.push(n)
         }
         n = nodes.iterateNext()
@@ -5089,88 +5710,522 @@ xmldom.XPath = function() {
   };
   return xmldom.XPath
 }();
-odf.StyleInfo = function StyleInfo() {
-  var chartns = "urn:oasis:names:tc:opendocument:xmlns:chart:1.0", dbns = "urn:oasis:names:tc:opendocument:xmlns:database:1.0", dr3dns = "urn:oasis:names:tc:opendocument:xmlns:dr3d:1.0", drawns = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0", fons = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0", formns = "urn:oasis:names:tc:opendocument:xmlns:form:1.0", numberns = "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0", officens = "urn:oasis:names:tc:opendocument:xmlns:office:1.0", 
-  presentationns = "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0", stylens = "urn:oasis:names:tc:opendocument:xmlns:style:1.0", svgns = "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0", tablens = "urn:oasis:names:tc:opendocument:xmlns:table:1.0", textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", elementstyles = {"text":[{ens:stylens, en:"tab-stop", ans:stylens, a:"leader-text-style"}, {ens:stylens, en:"drop-cap", ans:stylens, a:"style-name"}, {ens:textns, en:"notes-configuration", 
-  ans:textns, a:"citation-body-style-name"}, {ens:textns, en:"notes-configuration", ans:textns, a:"citation-style-name"}, {ens:textns, en:"a", ans:textns, a:"style-name"}, {ens:textns, en:"alphabetical-index", ans:textns, a:"style-name"}, {ens:textns, en:"linenumbering-configuration", ans:textns, a:"style-name"}, {ens:textns, en:"list-level-style-number", ans:textns, a:"style-name"}, {ens:textns, en:"ruby-text", ans:textns, a:"style-name"}, {ens:textns, en:"span", ans:textns, a:"style-name"}, {ens:textns, 
-  en:"a", ans:textns, a:"visited-style-name"}, {ens:stylens, en:"text-properties", ans:stylens, a:"text-line-through-text-style"}, {ens:textns, en:"alphabetical-index-source", ans:textns, a:"main-entry-style-name"}, {ens:textns, en:"index-entry-bibliography", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-chapter", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-link-end", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-link-start", ans:textns, a:"style-name"}, {ens:textns, 
-  en:"index-entry-page-number", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-span", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-tab-stop", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-text", ans:textns, a:"style-name"}, {ens:textns, en:"index-title-template", ans:textns, a:"style-name"}, {ens:textns, en:"list-level-style-bullet", ans:textns, a:"style-name"}, {ens:textns, en:"outline-level-style", ans:textns, a:"style-name"}], "paragraph":[{ens:drawns, en:"caption", 
-  ans:drawns, a:"text-style-name"}, {ens:drawns, en:"circle", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"connector", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"control", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"custom-shape", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"ellipse", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"frame", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"line", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"measure", ans:drawns, 
-  a:"text-style-name"}, {ens:drawns, en:"path", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"polygon", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"polyline", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"rect", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"regular-polygon", ans:drawns, a:"text-style-name"}, {ens:officens, en:"annotation", ans:drawns, a:"text-style-name"}, {ens:formns, en:"column", ans:formns, a:"text-style-name"}, {ens:stylens, en:"style", ans:stylens, a:"next-style-name"}, 
-  {ens:tablens, en:"body", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"even-columns", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"even-rows", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"first-column", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"first-row", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"last-column", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"last-row", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, 
-  en:"odd-columns", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"odd-rows", ans:tablens, a:"paragraph-style-name"}, {ens:textns, en:"notes-configuration", ans:textns, a:"default-style-name"}, {ens:textns, en:"alphabetical-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"bibliography-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"h", ans:textns, a:"style-name"}, {ens:textns, en:"illustration-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, 
-  en:"index-source-style", ans:textns, a:"style-name"}, {ens:textns, en:"object-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"p", ans:textns, a:"style-name"}, {ens:textns, en:"table-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"table-of-content-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"table-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"user-index-entry-template", ans:textns, a:"style-name"}, {ens:stylens, en:"page-layout-properties", 
-  ans:stylens, a:"register-truth-ref-style-name"}], "chart":[{ens:chartns, en:"axis", ans:chartns, a:"style-name"}, {ens:chartns, en:"chart", ans:chartns, a:"style-name"}, {ens:chartns, en:"data-label", ans:chartns, a:"style-name"}, {ens:chartns, en:"data-point", ans:chartns, a:"style-name"}, {ens:chartns, en:"equation", ans:chartns, a:"style-name"}, {ens:chartns, en:"error-indicator", ans:chartns, a:"style-name"}, {ens:chartns, en:"floor", ans:chartns, a:"style-name"}, {ens:chartns, en:"footer", 
-  ans:chartns, a:"style-name"}, {ens:chartns, en:"grid", ans:chartns, a:"style-name"}, {ens:chartns, en:"legend", ans:chartns, a:"style-name"}, {ens:chartns, en:"mean-value", ans:chartns, a:"style-name"}, {ens:chartns, en:"plot-area", ans:chartns, a:"style-name"}, {ens:chartns, en:"regression-curve", ans:chartns, a:"style-name"}, {ens:chartns, en:"series", ans:chartns, a:"style-name"}, {ens:chartns, en:"stock-gain-marker", ans:chartns, a:"style-name"}, {ens:chartns, en:"stock-loss-marker", ans:chartns, 
-  a:"style-name"}, {ens:chartns, en:"stock-range-line", ans:chartns, a:"style-name"}, {ens:chartns, en:"subtitle", ans:chartns, a:"style-name"}, {ens:chartns, en:"title", ans:chartns, a:"style-name"}, {ens:chartns, en:"wall", ans:chartns, a:"style-name"}], "section":[{ens:textns, en:"alphabetical-index", ans:textns, a:"style-name"}, {ens:textns, en:"bibliography", ans:textns, a:"style-name"}, {ens:textns, en:"illustration-index", ans:textns, a:"style-name"}, {ens:textns, en:"index-title", ans:textns, 
-  a:"style-name"}, {ens:textns, en:"object-index", ans:textns, a:"style-name"}, {ens:textns, en:"section", ans:textns, a:"style-name"}, {ens:textns, en:"table-of-content", ans:textns, a:"style-name"}, {ens:textns, en:"table-index", ans:textns, a:"style-name"}, {ens:textns, en:"user-index", ans:textns, a:"style-name"}], "ruby":[{ens:textns, en:"ruby", ans:textns, a:"style-name"}], "table":[{ens:dbns, en:"query", ans:dbns, a:"style-name"}, {ens:dbns, en:"table-representation", ans:dbns, a:"style-name"}, 
-  {ens:tablens, en:"background", ans:tablens, a:"style-name"}, {ens:tablens, en:"table", ans:tablens, a:"style-name"}], "table-column":[{ens:dbns, en:"column", ans:dbns, a:"style-name"}, {ens:tablens, en:"table-column", ans:tablens, a:"style-name"}], "table-row":[{ens:dbns, en:"query", ans:dbns, a:"default-row-style-name"}, {ens:dbns, en:"table-representation", ans:dbns, a:"default-row-style-name"}, {ens:tablens, en:"table-row", ans:tablens, a:"style-name"}], "table-cell":[{ens:dbns, en:"column", 
-  ans:dbns, a:"default-cell-style-name"}, {ens:tablens, en:"table-column", ans:tablens, a:"default-cell-style-name"}, {ens:tablens, en:"table-row", ans:tablens, a:"default-cell-style-name"}, {ens:tablens, en:"body", ans:tablens, a:"style-name"}, {ens:tablens, en:"covered-table-cell", ans:tablens, a:"style-name"}, {ens:tablens, en:"even-columns", ans:tablens, a:"style-name"}, {ens:tablens, en:"covered-table-cell", ans:tablens, a:"style-name"}, {ens:tablens, en:"even-columns", ans:tablens, a:"style-name"}, 
-  {ens:tablens, en:"even-rows", ans:tablens, a:"style-name"}, {ens:tablens, en:"first-column", ans:tablens, a:"style-name"}, {ens:tablens, en:"first-row", ans:tablens, a:"style-name"}, {ens:tablens, en:"last-column", ans:tablens, a:"style-name"}, {ens:tablens, en:"last-row", ans:tablens, a:"style-name"}, {ens:tablens, en:"odd-columns", ans:tablens, a:"style-name"}, {ens:tablens, en:"odd-rows", ans:tablens, a:"style-name"}, {ens:tablens, en:"table-cell", ans:tablens, a:"style-name"}], "graphic":[{ens:dr3dns, 
-  en:"cube", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"extrude", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"rotate", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"scene", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"sphere", ans:drawns, a:"style-name"}, {ens:drawns, en:"caption", ans:drawns, a:"style-name"}, {ens:drawns, en:"circle", ans:drawns, a:"style-name"}, {ens:drawns, en:"connector", ans:drawns, a:"style-name"}, {ens:drawns, en:"control", ans:drawns, a:"style-name"}, {ens:drawns, en:"custom-shape", 
-  ans:drawns, a:"style-name"}, {ens:drawns, en:"ellipse", ans:drawns, a:"style-name"}, {ens:drawns, en:"frame", ans:drawns, a:"style-name"}, {ens:drawns, en:"g", ans:drawns, a:"style-name"}, {ens:drawns, en:"line", ans:drawns, a:"style-name"}, {ens:drawns, en:"measure", ans:drawns, a:"style-name"}, {ens:drawns, en:"page-thumbnail", ans:drawns, a:"style-name"}, {ens:drawns, en:"path", ans:drawns, a:"style-name"}, {ens:drawns, en:"polygon", ans:drawns, a:"style-name"}, {ens:drawns, en:"polyline", ans:drawns, 
-  a:"style-name"}, {ens:drawns, en:"rect", ans:drawns, a:"style-name"}, {ens:drawns, en:"regular-polygon", ans:drawns, a:"style-name"}, {ens:officens, en:"annotation", ans:drawns, a:"style-name"}], "presentation":[{ens:dr3dns, en:"cube", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"extrude", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"rotate", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"scene", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"sphere", ans:presentationns, 
-  a:"style-name"}, {ens:drawns, en:"caption", ans:presentationns, a:"style-name"}, {ens:drawns, en:"circle", ans:presentationns, a:"style-name"}, {ens:drawns, en:"connector", ans:presentationns, a:"style-name"}, {ens:drawns, en:"control", ans:presentationns, a:"style-name"}, {ens:drawns, en:"custom-shape", ans:presentationns, a:"style-name"}, {ens:drawns, en:"ellipse", ans:presentationns, a:"style-name"}, {ens:drawns, en:"frame", ans:presentationns, a:"style-name"}, {ens:drawns, en:"g", ans:presentationns, 
-  a:"style-name"}, {ens:drawns, en:"line", ans:presentationns, a:"style-name"}, {ens:drawns, en:"measure", ans:presentationns, a:"style-name"}, {ens:drawns, en:"page-thumbnail", ans:presentationns, a:"style-name"}, {ens:drawns, en:"path", ans:presentationns, a:"style-name"}, {ens:drawns, en:"polygon", ans:presentationns, a:"style-name"}, {ens:drawns, en:"polyline", ans:presentationns, a:"style-name"}, {ens:drawns, en:"rect", ans:presentationns, a:"style-name"}, {ens:drawns, en:"regular-polygon", 
-  ans:presentationns, a:"style-name"}, {ens:officens, en:"annotation", ans:presentationns, a:"style-name"}], "drawing-page":[{ens:drawns, en:"page", ans:drawns, a:"style-name"}, {ens:presentationns, en:"notes", ans:drawns, a:"style-name"}, {ens:stylens, en:"handout-master", ans:drawns, a:"style-name"}, {ens:stylens, en:"master-page", ans:drawns, a:"style-name"}], "list-style":[{ens:textns, en:"list", ans:textns, a:"style-name"}, {ens:textns, en:"numbered-paragraph", ans:textns, a:"style-name"}, {ens:textns, 
-  en:"list-item", ans:textns, a:"style-override"}, {ens:stylens, en:"style", ans:stylens, a:"list-style-name"}, {ens:stylens, en:"style", ans:stylens, a:"data-style-name"}, {ens:stylens, en:"style", ans:stylens, a:"percentage-data-style-name"}, {ens:presentationns, en:"date-time-decl", ans:stylens, a:"data-style-name"}, {ens:textns, en:"creation-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"creation-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"database-display", ans:stylens, 
-  a:"data-style-name"}, {ens:textns, en:"date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"editing-duration", ans:stylens, a:"data-style-name"}, {ens:textns, en:"expression", ans:stylens, a:"data-style-name"}, {ens:textns, en:"meta-field", ans:stylens, a:"data-style-name"}, {ens:textns, en:"modification-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"modification-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"print-date", ans:stylens, a:"data-style-name"}, {ens:textns, 
-  en:"print-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"table-formula", ans:stylens, a:"data-style-name"}, {ens:textns, en:"time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-defined", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-field-get", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-field-input", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-get", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-input", ans:stylens, 
-  a:"data-style-name"}, {ens:textns, en:"variable-set", ans:stylens, a:"data-style-name"}], "data":[{ens:stylens, en:"style", ans:stylens, a:"data-style-name"}, {ens:stylens, en:"style", ans:stylens, a:"percentage-data-style-name"}, {ens:presentationns, en:"date-time-decl", ans:stylens, a:"data-style-name"}, {ens:textns, en:"creation-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"creation-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"database-display", ans:stylens, a:"data-style-name"}, 
-  {ens:textns, en:"date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"editing-duration", ans:stylens, a:"data-style-name"}, {ens:textns, en:"expression", ans:stylens, a:"data-style-name"}, {ens:textns, en:"meta-field", ans:stylens, a:"data-style-name"}, {ens:textns, en:"modification-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"modification-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"print-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"print-time", 
-  ans:stylens, a:"data-style-name"}, {ens:textns, en:"table-formula", ans:stylens, a:"data-style-name"}, {ens:textns, en:"time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-defined", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-field-get", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-field-input", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-get", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-input", ans:stylens, a:"data-style-name"}, 
-  {ens:textns, en:"variable-set", ans:stylens, a:"data-style-name"}], "page-layout":[{ens:presentationns, en:"notes", ans:stylens, a:"page-layout-name"}, {ens:stylens, en:"handout-master", ans:stylens, a:"page-layout-name"}, {ens:stylens, en:"master-page", ans:stylens, a:"page-layout-name"}]}, elements;
-  function canElementHaveStyle(family, element) {
-    var elname = elements[element.localName], elns = elname && elname[element.namespaceURI], length = elns ? elns.length : 0, i;
-    return elns && elns.length > 0
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+gui.AnnotationViewManager = function AnnotationViewManager(odfCanvas, odfFragment, annotationsPane) {
+  var annotations = [], doc = odfFragment.ownerDocument, odfUtils = new odf.OdfUtils, CONNECTOR_MARGIN = 30, NOTE_MARGIN = 20, window = runtime.getWindow();
+  runtime.assert(Boolean(window), "Expected to be run in an environment which has a global window, like a browser.");
+  function wrapAnnotation(annotation) {
+    var annotationWrapper = doc.createElement("div"), annotationNote = doc.createElement("div"), connectorHorizontal = doc.createElement("div"), connectorAngular = doc.createElement("div"), annotationNode = annotation.node;
+    annotationWrapper.className = "annotationWrapper";
+    annotationNode.parentNode.insertBefore(annotationWrapper, annotationNode);
+    annotationNote.className = "annotationNote";
+    annotationNote.appendChild(annotationNode);
+    connectorHorizontal.className = "annotationConnector horizontal";
+    connectorAngular.className = "annotationConnector angular";
+    annotationWrapper.appendChild(annotationNote);
+    annotationWrapper.appendChild(connectorHorizontal);
+    annotationWrapper.appendChild(connectorAngular)
   }
-  function getStyleRef(family, element) {
-    var elname = elements[element.localName], elns = elname && elname[element.namespaceURI], length = elns ? elns.length : 0, i, attr;
-    for(i = 0;i < length;i += 1) {
-      attr = element.getAttributeNS(elns[i].ns, elns[i].localname)
+  function unwrapAnnotation(annotation) {
+    var annotationNode = annotation.node, annotationWrapper = annotationNode.parentNode.parentNode;
+    if(annotationWrapper.localName === "div") {
+      annotationWrapper.parentNode.insertBefore(annotationNode, annotationWrapper);
+      annotationWrapper.parentNode.removeChild(annotationWrapper)
     }
-    return null
   }
-  function getUsedStylesForAutomatic(element, keys) {
-    var elname = elements[element.localName], elns = elname && elname[element.namespaceURI], length = elns ? elns.length : 0, i, attr, group, map, e;
-    for(i = 0;i < length;i += 1) {
-      attr = element.getAttributeNS(elns[i].ns, elns[i].localname);
-      if(attr) {
-        group = elns[i].keygroup;
-        map = keys[group];
-        if(!map) {
-          map = keys[group] = {}
-        }
-        map[attr] = 1
+  function highlightAnnotation(annotation) {
+    var annotationNode = annotation.node, annotationEnd = annotation.end, range = doc.createRange(), textNodes;
+    if(annotationEnd) {
+      range.setStart(annotationNode, annotationNode.childNodes.length);
+      range.setEnd(annotationEnd, 0);
+      textNodes = odfUtils.getTextNodes(range, false);
+      textNodes.forEach(function(n) {
+        var container = doc.createElement("span");
+        container.className = "annotationHighlight";
+        container.setAttribute("annotation", annotationNode.getAttributeNS(odf.Namespaces.officens, "name"));
+        n.parentNode.insertBefore(container, n);
+        container.appendChild(n)
+      })
+    }
+    range.detach()
+  }
+  function unhighlightAnnotation(annotation) {
+    var annotationName = annotation.node.getAttributeNS(odf.Namespaces.officens, "name"), highlightSpans = doc.querySelectorAll('span.annotationHighlight[annotation="' + annotationName + '"]'), i, j, container, children;
+    for(i = 0;i < highlightSpans.length;i += 1) {
+      container = highlightSpans[i];
+      children = container.childNodes;
+      for(j = 0;j < children.length;j += 1) {
+        container.parentNode.insertBefore(children[j], container)
+      }
+      container.parentNode.removeChild(container)
+    }
+  }
+  function lineDistance(point1, point2) {
+    var xs = 0, ys = 0;
+    xs = point2.x - point1.x;
+    xs = xs * xs;
+    ys = point2.y - point1.y;
+    ys = ys * ys;
+    return Math.sqrt(xs + ys)
+  }
+  function renderAnnotation(annotation) {
+    var annotationNote = annotation.node.parentNode, connectorHorizontal = annotationNote.nextSibling, connectorAngular = connectorHorizontal.nextSibling, annotationWrapper = annotationNote.parentNode, connectorAngle = 0, previousAnnotation = annotations[annotations.indexOf(annotation) - 1], previousRect, creatorNode = annotation.node.getElementsByTagNameNS(odf.Namespaces.dcns, "creator")[0], creatorName, zoomLevel = odfCanvas.getZoomLevel();
+    annotationNote.style.left = (annotationsPane.getBoundingClientRect().left - annotationWrapper.getBoundingClientRect().left) / zoomLevel + "px";
+    annotationNote.style.width = annotationsPane.getBoundingClientRect().width / zoomLevel + "px";
+    connectorHorizontal.style.width = parseFloat(annotationNote.style.left) - CONNECTOR_MARGIN + "px";
+    if(previousAnnotation) {
+      previousRect = previousAnnotation.node.parentNode.getBoundingClientRect();
+      if((annotationWrapper.getBoundingClientRect().top - previousRect.bottom) / zoomLevel <= NOTE_MARGIN) {
+        annotationNote.style.top = Math.abs(annotationWrapper.getBoundingClientRect().top - previousRect.bottom) / zoomLevel + NOTE_MARGIN + "px"
+      }else {
+        annotationNote.style.top = "0px"
       }
     }
-    i = element.firstChild;
+    connectorAngular.style.left = connectorHorizontal.getBoundingClientRect().width / zoomLevel + "px";
+    connectorAngular.style.width = lineDistance({x:connectorAngular.getBoundingClientRect().left / zoomLevel, y:connectorAngular.getBoundingClientRect().top / zoomLevel}, {x:annotationNote.getBoundingClientRect().left / zoomLevel, y:annotationNote.getBoundingClientRect().top / zoomLevel}) + "px";
+    connectorAngle = Math.asin((annotationNote.getBoundingClientRect().top - connectorAngular.getBoundingClientRect().top) / (zoomLevel * parseFloat(connectorAngular.style.width)));
+    connectorAngular.style.transform = "rotate(" + connectorAngle + "rad)";
+    connectorAngular.style.MozTransform = "rotate(" + connectorAngle + "rad)";
+    connectorAngular.style.WebkitTransform = "rotate(" + connectorAngle + "rad)";
+    connectorAngular.style.msTransform = "rotate(" + connectorAngle + "rad)";
+    if(creatorNode) {
+      creatorName = window.getComputedStyle((creatorNode), ":before").content;
+      if(creatorName && creatorName !== "none") {
+        creatorName = creatorName.substring(1, creatorName.length - 1);
+        if(creatorNode.firstChild) {
+          creatorNode.firstChild.nodeValue = creatorName
+        }else {
+          creatorNode.appendChild(doc.createTextNode(creatorName))
+        }
+      }
+    }
+  }
+  function sortAnnotations() {
+    annotations.sort(function(a, b) {
+      if(a.node.compareDocumentPosition(b.node) === Node.DOCUMENT_POSITION_FOLLOWING) {
+        return-1
+      }
+      return 1
+    })
+  }
+  function rerenderAnnotations() {
+    var i;
+    for(i = 0;i < annotations.length;i += 1) {
+      renderAnnotation(annotations[i])
+    }
+  }
+  this.rerenderAnnotations = rerenderAnnotations;
+  function addAnnotation(annotation) {
+    annotations.push({node:annotation.node, end:annotation.end});
+    sortAnnotations();
+    wrapAnnotation(annotation);
+    if(annotation.end) {
+      highlightAnnotation(annotation)
+    }
+    rerenderAnnotations()
+  }
+  this.addAnnotation = addAnnotation;
+  function forgetAnnotation(annotation) {
+    unwrapAnnotation(annotation);
+    unhighlightAnnotation(annotation);
+    annotations.splice(annotations.indexOf(annotation), 1)
+  }
+  function forgetAnnotations() {
+    while(annotations.length) {
+      forgetAnnotation(annotations[0])
+    }
+  }
+  this.forgetAnnotations = forgetAnnotations
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+odf.OdfNodeFilter = function OdfNodeFilter() {
+  this.acceptNode = function(node) {
+    var result;
+    if(node.namespaceURI === "http://www.w3.org/1999/xhtml") {
+      result = NodeFilter.FILTER_SKIP
+    }else {
+      if(node.namespaceURI && node.namespaceURI.match(/^urn:webodf:/)) {
+        result = NodeFilter.FILTER_REJECT
+      }else {
+        result = NodeFilter.FILTER_ACCEPT
+      }
+    }
+    return result
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+odf.Namespaces = function() {
+  var drawns = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0", fons = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0", officens = "urn:oasis:names:tc:opendocument:xmlns:office:1.0", presentationns = "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0", stylens = "urn:oasis:names:tc:opendocument:xmlns:style:1.0", svgns = "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0", tablens = "urn:oasis:names:tc:opendocument:xmlns:table:1.0", textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", 
+  dr3dns = "urn:oasis:names:tc:opendocument:xmlns:dr3d:1.0", numberns = "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0", xlinkns = "http://www.w3.org/1999/xlink", xmlns = "http://www.w3.org/XML/1998/namespace", dcns = "http://purl.org/dc/elements/1.1/", webodfns = "urn:webodf", namespaceMap = {"draw":drawns, "fo":fons, "office":officens, "presentation":presentationns, "style":stylens, "svg":svgns, "table":tablens, "text":textns, "dr3d":dr3dns, "numberns":numberns, "xlink":xlinkns, "xml":xmlns, 
+  "dc":dcns, "webodf":webodfns}, namespaces;
+  function forEachPrefix(cb) {
+    var prefix;
+    for(prefix in namespaceMap) {
+      if(namespaceMap.hasOwnProperty(prefix)) {
+        cb(prefix, namespaceMap[prefix])
+      }
+    }
+  }
+  function resolvePrefix(prefix) {
+    return namespaceMap[prefix] || null
+  }
+  resolvePrefix.lookupNamespaceURI = resolvePrefix;
+  namespaces = function Namespaces() {
+  };
+  namespaces.forEachPrefix = forEachPrefix;
+  namespaces.resolvePrefix = resolvePrefix;
+  namespaces.namespaceMap = namespaceMap;
+  namespaces.drawns = drawns;
+  namespaces.fons = fons;
+  namespaces.officens = officens;
+  namespaces.presentationns = presentationns;
+  namespaces.stylens = stylens;
+  namespaces.svgns = svgns;
+  namespaces.tablens = tablens;
+  namespaces.textns = textns;
+  namespaces.dr3dns = dr3dns;
+  namespaces.numberns = numberns;
+  namespaces.xlinkns = xlinkns;
+  namespaces.xmlns = xmlns;
+  namespaces.dcns = dcns;
+  namespaces.webodfns = webodfns;
+  return namespaces
+}();
+runtime.loadClass("xmldom.XPath");
+odf.StyleInfo = function StyleInfo() {
+  var chartns = "urn:oasis:names:tc:opendocument:xmlns:chart:1.0", dbns = "urn:oasis:names:tc:opendocument:xmlns:database:1.0", dr3dns = "urn:oasis:names:tc:opendocument:xmlns:dr3d:1.0", drawns = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0", formns = "urn:oasis:names:tc:opendocument:xmlns:form:1.0", numberns = "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0", officens = "urn:oasis:names:tc:opendocument:xmlns:office:1.0", presentationns = "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0", 
+  stylens = "urn:oasis:names:tc:opendocument:xmlns:style:1.0", tablens = "urn:oasis:names:tc:opendocument:xmlns:table:1.0", textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", nsprefixes = {"urn:oasis:names:tc:opendocument:xmlns:chart:1.0":"chart:", "urn:oasis:names:tc:opendocument:xmlns:database:1.0":"db:", "urn:oasis:names:tc:opendocument:xmlns:dr3d:1.0":"dr3d:", "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0":"draw:", "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0":"fo:", 
+  "urn:oasis:names:tc:opendocument:xmlns:form:1.0":"form:", "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0":"number:", "urn:oasis:names:tc:opendocument:xmlns:office:1.0":"office:", "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0":"presentation:", "urn:oasis:names:tc:opendocument:xmlns:style:1.0":"style:", "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0":"svg:", "urn:oasis:names:tc:opendocument:xmlns:table:1.0":"table:", "urn:oasis:names:tc:opendocument:xmlns:text:1.0":"chart:", 
+  "http://www.w3.org/XML/1998/namespace":"xml:"}, elementstyles = {"text":[{ens:stylens, en:"tab-stop", ans:stylens, a:"leader-text-style"}, {ens:stylens, en:"drop-cap", ans:stylens, a:"style-name"}, {ens:textns, en:"notes-configuration", ans:textns, a:"citation-body-style-name"}, {ens:textns, en:"notes-configuration", ans:textns, a:"citation-style-name"}, {ens:textns, en:"a", ans:textns, a:"style-name"}, {ens:textns, en:"alphabetical-index", ans:textns, a:"style-name"}, {ens:textns, en:"linenumbering-configuration", 
+  ans:textns, a:"style-name"}, {ens:textns, en:"list-level-style-number", ans:textns, a:"style-name"}, {ens:textns, en:"ruby-text", ans:textns, a:"style-name"}, {ens:textns, en:"span", ans:textns, a:"style-name"}, {ens:textns, en:"a", ans:textns, a:"visited-style-name"}, {ens:stylens, en:"text-properties", ans:stylens, a:"text-line-through-text-style"}, {ens:textns, en:"alphabetical-index-source", ans:textns, a:"main-entry-style-name"}, {ens:textns, en:"index-entry-bibliography", ans:textns, a:"style-name"}, 
+  {ens:textns, en:"index-entry-chapter", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-link-end", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-link-start", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-page-number", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-span", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-tab-stop", ans:textns, a:"style-name"}, {ens:textns, en:"index-entry-text", ans:textns, a:"style-name"}, {ens:textns, en:"index-title-template", 
+  ans:textns, a:"style-name"}, {ens:textns, en:"list-level-style-bullet", ans:textns, a:"style-name"}, {ens:textns, en:"outline-level-style", ans:textns, a:"style-name"}], "paragraph":[{ens:drawns, en:"caption", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"circle", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"connector", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"control", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"custom-shape", ans:drawns, a:"text-style-name"}, {ens:drawns, 
+  en:"ellipse", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"frame", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"line", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"measure", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"path", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"polygon", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"polyline", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"rect", ans:drawns, a:"text-style-name"}, {ens:drawns, en:"regular-polygon", 
+  ans:drawns, a:"text-style-name"}, {ens:officens, en:"annotation", ans:drawns, a:"text-style-name"}, {ens:formns, en:"column", ans:formns, a:"text-style-name"}, {ens:stylens, en:"style", ans:stylens, a:"next-style-name"}, {ens:tablens, en:"body", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"even-columns", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"even-rows", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"first-column", ans:tablens, a:"paragraph-style-name"}, 
+  {ens:tablens, en:"first-row", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"last-column", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"last-row", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"odd-columns", ans:tablens, a:"paragraph-style-name"}, {ens:tablens, en:"odd-rows", ans:tablens, a:"paragraph-style-name"}, {ens:textns, en:"notes-configuration", ans:textns, a:"default-style-name"}, {ens:textns, en:"alphabetical-index-entry-template", ans:textns, a:"style-name"}, 
+  {ens:textns, en:"bibliography-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"h", ans:textns, a:"style-name"}, {ens:textns, en:"illustration-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"index-source-style", ans:textns, a:"style-name"}, {ens:textns, en:"object-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"p", ans:textns, a:"style-name"}, {ens:textns, en:"table-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"table-of-content-entry-template", 
+  ans:textns, a:"style-name"}, {ens:textns, en:"table-index-entry-template", ans:textns, a:"style-name"}, {ens:textns, en:"user-index-entry-template", ans:textns, a:"style-name"}, {ens:stylens, en:"page-layout-properties", ans:stylens, a:"register-truth-ref-style-name"}], "chart":[{ens:chartns, en:"axis", ans:chartns, a:"style-name"}, {ens:chartns, en:"chart", ans:chartns, a:"style-name"}, {ens:chartns, en:"data-label", ans:chartns, a:"style-name"}, {ens:chartns, en:"data-point", ans:chartns, a:"style-name"}, 
+  {ens:chartns, en:"equation", ans:chartns, a:"style-name"}, {ens:chartns, en:"error-indicator", ans:chartns, a:"style-name"}, {ens:chartns, en:"floor", ans:chartns, a:"style-name"}, {ens:chartns, en:"footer", ans:chartns, a:"style-name"}, {ens:chartns, en:"grid", ans:chartns, a:"style-name"}, {ens:chartns, en:"legend", ans:chartns, a:"style-name"}, {ens:chartns, en:"mean-value", ans:chartns, a:"style-name"}, {ens:chartns, en:"plot-area", ans:chartns, a:"style-name"}, {ens:chartns, en:"regression-curve", 
+  ans:chartns, a:"style-name"}, {ens:chartns, en:"series", ans:chartns, a:"style-name"}, {ens:chartns, en:"stock-gain-marker", ans:chartns, a:"style-name"}, {ens:chartns, en:"stock-loss-marker", ans:chartns, a:"style-name"}, {ens:chartns, en:"stock-range-line", ans:chartns, a:"style-name"}, {ens:chartns, en:"subtitle", ans:chartns, a:"style-name"}, {ens:chartns, en:"title", ans:chartns, a:"style-name"}, {ens:chartns, en:"wall", ans:chartns, a:"style-name"}], "section":[{ens:textns, en:"alphabetical-index", 
+  ans:textns, a:"style-name"}, {ens:textns, en:"bibliography", ans:textns, a:"style-name"}, {ens:textns, en:"illustration-index", ans:textns, a:"style-name"}, {ens:textns, en:"index-title", ans:textns, a:"style-name"}, {ens:textns, en:"object-index", ans:textns, a:"style-name"}, {ens:textns, en:"section", ans:textns, a:"style-name"}, {ens:textns, en:"table-of-content", ans:textns, a:"style-name"}, {ens:textns, en:"table-index", ans:textns, a:"style-name"}, {ens:textns, en:"user-index", ans:textns, 
+  a:"style-name"}], "ruby":[{ens:textns, en:"ruby", ans:textns, a:"style-name"}], "table":[{ens:dbns, en:"query", ans:dbns, a:"style-name"}, {ens:dbns, en:"table-representation", ans:dbns, a:"style-name"}, {ens:tablens, en:"background", ans:tablens, a:"style-name"}, {ens:tablens, en:"table", ans:tablens, a:"style-name"}], "table-column":[{ens:dbns, en:"column", ans:dbns, a:"style-name"}, {ens:tablens, en:"table-column", ans:tablens, a:"style-name"}], "table-row":[{ens:dbns, en:"query", ans:dbns, 
+  a:"default-row-style-name"}, {ens:dbns, en:"table-representation", ans:dbns, a:"default-row-style-name"}, {ens:tablens, en:"table-row", ans:tablens, a:"style-name"}], "table-cell":[{ens:dbns, en:"column", ans:dbns, a:"default-cell-style-name"}, {ens:tablens, en:"table-column", ans:tablens, a:"default-cell-style-name"}, {ens:tablens, en:"table-row", ans:tablens, a:"default-cell-style-name"}, {ens:tablens, en:"body", ans:tablens, a:"style-name"}, {ens:tablens, en:"covered-table-cell", ans:tablens, 
+  a:"style-name"}, {ens:tablens, en:"even-columns", ans:tablens, a:"style-name"}, {ens:tablens, en:"covered-table-cell", ans:tablens, a:"style-name"}, {ens:tablens, en:"even-columns", ans:tablens, a:"style-name"}, {ens:tablens, en:"even-rows", ans:tablens, a:"style-name"}, {ens:tablens, en:"first-column", ans:tablens, a:"style-name"}, {ens:tablens, en:"first-row", ans:tablens, a:"style-name"}, {ens:tablens, en:"last-column", ans:tablens, a:"style-name"}, {ens:tablens, en:"last-row", ans:tablens, 
+  a:"style-name"}, {ens:tablens, en:"odd-columns", ans:tablens, a:"style-name"}, {ens:tablens, en:"odd-rows", ans:tablens, a:"style-name"}, {ens:tablens, en:"table-cell", ans:tablens, a:"style-name"}], "graphic":[{ens:dr3dns, en:"cube", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"extrude", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"rotate", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"scene", ans:drawns, a:"style-name"}, {ens:dr3dns, en:"sphere", ans:drawns, a:"style-name"}, {ens:drawns, en:"caption", 
+  ans:drawns, a:"style-name"}, {ens:drawns, en:"circle", ans:drawns, a:"style-name"}, {ens:drawns, en:"connector", ans:drawns, a:"style-name"}, {ens:drawns, en:"control", ans:drawns, a:"style-name"}, {ens:drawns, en:"custom-shape", ans:drawns, a:"style-name"}, {ens:drawns, en:"ellipse", ans:drawns, a:"style-name"}, {ens:drawns, en:"frame", ans:drawns, a:"style-name"}, {ens:drawns, en:"g", ans:drawns, a:"style-name"}, {ens:drawns, en:"line", ans:drawns, a:"style-name"}, {ens:drawns, en:"measure", 
+  ans:drawns, a:"style-name"}, {ens:drawns, en:"page-thumbnail", ans:drawns, a:"style-name"}, {ens:drawns, en:"path", ans:drawns, a:"style-name"}, {ens:drawns, en:"polygon", ans:drawns, a:"style-name"}, {ens:drawns, en:"polyline", ans:drawns, a:"style-name"}, {ens:drawns, en:"rect", ans:drawns, a:"style-name"}, {ens:drawns, en:"regular-polygon", ans:drawns, a:"style-name"}, {ens:officens, en:"annotation", ans:drawns, a:"style-name"}], "presentation":[{ens:dr3dns, en:"cube", ans:presentationns, a:"style-name"}, 
+  {ens:dr3dns, en:"extrude", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"rotate", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"scene", ans:presentationns, a:"style-name"}, {ens:dr3dns, en:"sphere", ans:presentationns, a:"style-name"}, {ens:drawns, en:"caption", ans:presentationns, a:"style-name"}, {ens:drawns, en:"circle", ans:presentationns, a:"style-name"}, {ens:drawns, en:"connector", ans:presentationns, a:"style-name"}, {ens:drawns, en:"control", ans:presentationns, a:"style-name"}, 
+  {ens:drawns, en:"custom-shape", ans:presentationns, a:"style-name"}, {ens:drawns, en:"ellipse", ans:presentationns, a:"style-name"}, {ens:drawns, en:"frame", ans:presentationns, a:"style-name"}, {ens:drawns, en:"g", ans:presentationns, a:"style-name"}, {ens:drawns, en:"line", ans:presentationns, a:"style-name"}, {ens:drawns, en:"measure", ans:presentationns, a:"style-name"}, {ens:drawns, en:"page-thumbnail", ans:presentationns, a:"style-name"}, {ens:drawns, en:"path", ans:presentationns, a:"style-name"}, 
+  {ens:drawns, en:"polygon", ans:presentationns, a:"style-name"}, {ens:drawns, en:"polyline", ans:presentationns, a:"style-name"}, {ens:drawns, en:"rect", ans:presentationns, a:"style-name"}, {ens:drawns, en:"regular-polygon", ans:presentationns, a:"style-name"}, {ens:officens, en:"annotation", ans:presentationns, a:"style-name"}], "drawing-page":[{ens:drawns, en:"page", ans:drawns, a:"style-name"}, {ens:presentationns, en:"notes", ans:drawns, a:"style-name"}, {ens:stylens, en:"handout-master", ans:drawns, 
+  a:"style-name"}, {ens:stylens, en:"master-page", ans:drawns, a:"style-name"}], "list-style":[{ens:textns, en:"list", ans:textns, a:"style-name"}, {ens:textns, en:"numbered-paragraph", ans:textns, a:"style-name"}, {ens:textns, en:"list-item", ans:textns, a:"style-override"}, {ens:stylens, en:"style", ans:stylens, a:"list-style-name"}], "data":[{ens:stylens, en:"style", ans:stylens, a:"data-style-name"}, {ens:stylens, en:"style", ans:stylens, a:"percentage-data-style-name"}, {ens:presentationns, 
+  en:"date-time-decl", ans:stylens, a:"data-style-name"}, {ens:textns, en:"creation-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"creation-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"database-display", ans:stylens, a:"data-style-name"}, {ens:textns, en:"date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"editing-duration", ans:stylens, a:"data-style-name"}, {ens:textns, en:"expression", ans:stylens, a:"data-style-name"}, {ens:textns, en:"meta-field", ans:stylens, 
+  a:"data-style-name"}, {ens:textns, en:"modification-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"modification-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"print-date", ans:stylens, a:"data-style-name"}, {ens:textns, en:"print-time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"table-formula", ans:stylens, a:"data-style-name"}, {ens:textns, en:"time", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-defined", ans:stylens, a:"data-style-name"}, {ens:textns, 
+  en:"user-field-get", ans:stylens, a:"data-style-name"}, {ens:textns, en:"user-field-input", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-get", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-input", ans:stylens, a:"data-style-name"}, {ens:textns, en:"variable-set", ans:stylens, a:"data-style-name"}], "page-layout":[{ens:presentationns, en:"notes", ans:stylens, a:"page-layout-name"}, {ens:stylens, en:"handout-master", ans:stylens, a:"page-layout-name"}, {ens:stylens, 
+  en:"master-page", ans:stylens, a:"page-layout-name"}]}, elements, xpath = new xmldom.XPath;
+  function hasDerivedStyles(odfbody, nsResolver, styleElement) {
+    var nodes, xp, resolver = nsResolver("style"), styleName = styleElement.getAttributeNS(resolver, "name"), styleFamily = styleElement.getAttributeNS(resolver, "family");
+    xp = "//style:*[@style:parent-style-name='" + styleName + "'][@style:family='" + styleFamily + "']";
+    nodes = xpath.getODFElementsWithXPath(odfbody, xp, nsResolver);
+    if(nodes.length) {
+      return true
+    }
+    return false
+  }
+  function prefixUsedStyleNames(styleUsingElementsRoot, prefix) {
+    var elname = elements[styleUsingElementsRoot.localName], elns = elname && elname[styleUsingElementsRoot.namespaceURI], length = elns ? elns.length : 0, i, stylename, e;
+    for(i = 0;i < length;i += 1) {
+      stylename = styleUsingElementsRoot.getAttributeNS(elns[i].ns, elns[i].localname);
+      if(stylename) {
+        styleUsingElementsRoot.setAttributeNS(elns[i].ns, nsprefixes[elns[i].ns] + elns[i].localname, prefix + stylename)
+      }
+    }
+    i = styleUsingElementsRoot.firstChild;
     while(i) {
-      if(i.nodeType === 1) {
-        e = i;
-        getUsedStylesForAutomatic(e, keys)
+      if(i.nodeType === Node.ELEMENT_NODE) {
+        e = (i);
+        prefixUsedStyleNames(e, prefix)
       }
       i = i.nextSibling
     }
   }
+  function prefixStyleName(styleElement, prefix) {
+    var stylename = styleElement.getAttributeNS(drawns, "name"), ns;
+    if(stylename) {
+      ns = drawns
+    }else {
+      stylename = styleElement.getAttributeNS(stylens, "name");
+      if(stylename) {
+        ns = stylens
+      }
+    }
+    if(ns) {
+      styleElement.setAttributeNS(ns, nsprefixes[ns] + "name", prefix + stylename)
+    }
+  }
+  function prefixStyleNames(styleElementsRoot, prefix, styleUsingElementsRoot) {
+    var s;
+    if(styleElementsRoot) {
+      s = styleElementsRoot.firstChild;
+      while(s) {
+        if(s.nodeType === Node.ELEMENT_NODE) {
+          prefixStyleName((s), prefix)
+        }
+        s = s.nextSibling
+      }
+      prefixUsedStyleNames(styleElementsRoot, prefix);
+      if(styleUsingElementsRoot) {
+        prefixUsedStyleNames(styleUsingElementsRoot, prefix)
+      }
+    }
+  }
+  function removeRegExpFromUsedStyleNames(styleUsingElementsRoot, regExp) {
+    var elname = elements[styleUsingElementsRoot.localName], elns = elname && elname[styleUsingElementsRoot.namespaceURI], length = elns ? elns.length : 0, i, stylename, e;
+    for(i = 0;i < length;i += 1) {
+      stylename = styleUsingElementsRoot.getAttributeNS(elns[i].ns, elns[i].localname);
+      if(stylename) {
+        stylename = stylename.replace(regExp, "");
+        styleUsingElementsRoot.setAttributeNS(elns[i].ns, nsprefixes[elns[i].ns] + elns[i].localname, stylename)
+      }
+    }
+    i = styleUsingElementsRoot.firstChild;
+    while(i) {
+      if(i.nodeType === Node.ELEMENT_NODE) {
+        e = (i);
+        removeRegExpFromUsedStyleNames(e, regExp)
+      }
+      i = i.nextSibling
+    }
+  }
+  function removeRegExpFromStyleName(styleElement, regExp) {
+    var stylename = styleElement.getAttributeNS(drawns, "name"), ns;
+    if(stylename) {
+      ns = drawns
+    }else {
+      stylename = styleElement.getAttributeNS(stylens, "name");
+      if(stylename) {
+        ns = stylens
+      }
+    }
+    if(ns) {
+      stylename = stylename.replace(regExp, "");
+      styleElement.setAttributeNS(ns, nsprefixes[ns] + "name", stylename)
+    }
+  }
+  function removePrefixFromStyleNames(styleElementsRoot, prefix, styleUsingElementsRoot) {
+    var s, regExp = new RegExp("^" + prefix);
+    if(styleElementsRoot) {
+      s = styleElementsRoot.firstChild;
+      while(s) {
+        if(s.nodeType === Node.ELEMENT_NODE) {
+          removeRegExpFromStyleName((s), regExp)
+        }
+        s = s.nextSibling
+      }
+      removeRegExpFromUsedStyleNames(styleElementsRoot, regExp);
+      if(styleUsingElementsRoot) {
+        removeRegExpFromUsedStyleNames(styleUsingElementsRoot, regExp)
+      }
+    }
+  }
+  function determineStylesForNode(node, usedStyles) {
+    var elname = elements[node.localName], elns = elname && elname[node.namespaceURI], length = elns ? elns.length : 0, stylename, keyname, map, i;
+    for(i = 0;i < length;i += 1) {
+      stylename = node.getAttributeNS(elns[i].ns, elns[i].localname);
+      if(stylename) {
+        usedStyles = usedStyles || {};
+        keyname = elns[i].keyname;
+        map = usedStyles[keyname] = usedStyles[keyname] || {};
+        map[stylename] = 1
+      }
+    }
+    return usedStyles
+  }
+  function determineUsedStyles(styleUsingElementsRoot, usedStyles) {
+    var i, e;
+    determineStylesForNode(styleUsingElementsRoot, usedStyles);
+    i = styleUsingElementsRoot.firstChild;
+    while(i) {
+      if(i.nodeType === Node.ELEMENT_NODE) {
+        e = (i);
+        determineUsedStyles(e, usedStyles)
+      }
+      i = i.nextSibling
+    }
+  }
+  function StyleDefinition(key, name, family) {
+    this.key = key;
+    this.name = name;
+    this.family = family;
+    this.requires = {}
+  }
+  function getStyleDefinition(stylename, stylefamily, knownStyles) {
+    var styleKey = stylename + '"' + stylefamily, styleDefinition = knownStyles[styleKey];
+    if(!styleDefinition) {
+      styleDefinition = knownStyles[styleKey] = new StyleDefinition(styleKey, stylename, stylefamily)
+    }
+    return styleDefinition
+  }
+  function determineDependentStyles(styleUsingElementsRoot, styleScope, knownStyles) {
+    var elname = elements[styleUsingElementsRoot.localName], elns = elname && elname[styleUsingElementsRoot.namespaceURI], length = elns ? elns.length : 0, newScopeName = styleUsingElementsRoot.getAttributeNS(stylens, "name"), newScopeFamily = styleUsingElementsRoot.getAttributeNS(stylens, "family"), referencedStyleName, referencedStyleFamily, referencedStyleDef, i, e;
+    if(newScopeName && newScopeFamily) {
+      styleScope = getStyleDefinition(newScopeName, newScopeFamily, knownStyles)
+    }
+    if(styleScope) {
+      for(i = 0;i < length;i += 1) {
+        referencedStyleName = styleUsingElementsRoot.getAttributeNS(elns[i].ns, elns[i].localname);
+        if(referencedStyleName) {
+          referencedStyleFamily = elns[i].keyname;
+          referencedStyleDef = getStyleDefinition(referencedStyleName, referencedStyleFamily, knownStyles);
+          styleScope.requires[referencedStyleDef.key] = referencedStyleDef
+        }
+      }
+    }
+    i = styleUsingElementsRoot.firstChild;
+    while(i) {
+      if(i.nodeType === Node.ELEMENT_NODE) {
+        e = (i);
+        determineDependentStyles(e, styleScope, knownStyles)
+      }
+      i = i.nextSibling
+    }
+    return knownStyles
+  }
   function inverse(elementstyles) {
-    var keyname, i, list, item, l, elements = {}, map, array;
+    var keyname, i, l, list, item, e = {}, map, array;
     for(keyname in elementstyles) {
       if(elementstyles.hasOwnProperty(keyname)) {
         list = elementstyles[keyname];
         l = list.length;
         for(i = 0;i < l;i += 1) {
           item = list[i];
-          map = elements[item.en] = elements[item.en] || {};
+          map = e[item.en] = e[item.en] || {};
           array = map[item.ens] = map[item.ens] || [];
-          array.push({ns:item.ans, localname:item.a, keygroup:keyname})
+          array.push({ns:item.ans, localname:item.a, keyname:keyname})
         }
       }
     }
-    return elements
+    return e
   }
-  this.UsedKeysList = function(element) {
-    var usedKeys = {};
+  function mergeRequiredStyles(styleDependency, usedStyles) {
+    var family = usedStyles[styleDependency.family];
+    if(!family) {
+      family = usedStyles[styleDependency.family] = {}
+    }
+    family[styleDependency.name] = 1;
+    Object.keys((styleDependency.requires)).forEach(function(requiredStyleKey) {
+      mergeRequiredStyles((styleDependency.requires[requiredStyleKey]), usedStyles)
+    })
+  }
+  function mergeUsedAutomaticStyles(automaticStylesRoot, usedStyles) {
+    var automaticStyles = determineDependentStyles(automaticStylesRoot, null, {});
+    Object.keys(automaticStyles).forEach(function(styleKey) {
+      var automaticStyleDefinition = automaticStyles[styleKey], usedFamily = usedStyles[automaticStyleDefinition.family];
+      if(usedFamily && usedFamily.hasOwnProperty(automaticStyleDefinition.name)) {
+        mergeRequiredStyles(automaticStyleDefinition, usedStyles)
+      }
+    })
+  }
+  this.UsedStyleList = function(styleUsingElementsRoot, automaticStylesRoot) {
+    var usedStyles = {};
     this.uses = function(element) {
       var localName = element.localName, name = element.getAttributeNS(drawns, "name") || element.getAttributeNS(stylens, "name"), keyName, map;
       if(localName === "style") {
@@ -5182,46 +6237,705 @@ odf.StyleInfo = function StyleInfo() {
           keyName = localName
         }
       }
-      map = usedKeys[keyName];
+      map = usedStyles[keyName];
       return map ? map[name] > 0 : false
     };
-    getUsedStylesForAutomatic(element, usedKeys)
+    determineUsedStyles(styleUsingElementsRoot, usedStyles);
+    if(automaticStylesRoot) {
+      mergeUsedAutomaticStyles(automaticStylesRoot, usedStyles)
+    }
   };
-  this.canElementHaveStyle = canElementHaveStyle;
+  this.hasDerivedStyles = hasDerivedStyles;
+  this.prefixStyleNames = prefixStyleNames;
+  this.removePrefixFromStyleNames = removePrefixFromStyleNames;
+  this.determineStylesForNode = determineStylesForNode;
   elements = inverse(elementstyles)
 };
-odf.Style2CSS = function Style2CSS() {
-  var xlinkns = "http://www.w3.org/1999/xlink", drawns = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0", fons = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0", officens = "urn:oasis:names:tc:opendocument:xmlns:office:1.0", presentationns = "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0", stylens = "urn:oasis:names:tc:opendocument:xmlns:style:1.0", svgns = "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0", tablens = "urn:oasis:names:tc:opendocument:xmlns:table:1.0", 
-  textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", namespaces = {"draw":drawns, "fo":fons, "office":officens, "presentation":presentationns, "style":stylens, "svg":svgns, "table":tablens, "text":textns, "xlink":xlinkns}, familynamespaceprefixes = {"graphic":"draw", "paragraph":"text", "presentation":"presentation", "ruby":"text", "section":"text", "table":"table", "table-cell":"table", "table-column":"table", "table-row":"table", "text":"text", "list":"text"}, familytagnames = {"graphic":["circle", 
-  "connected", "control", "custom-shape", "ellipse", "frame", "g", "line", "measure", "page", "page-thumbnail", "path", "polygon", "polyline", "rect", "regular-polygon"], "paragraph":["alphabetical-index-entry-template", "h", "illustration-index-entry-template", "index-source-style", "object-index-entry-template", "p", "table-index-entry-template", "table-of-content-entry-template", "user-index-entry-template"], "presentation":["caption", "circle", "connector", "control", "custom-shape", "ellipse", 
-  "frame", "g", "line", "measure", "page-thumbnail", "path", "polygon", "polyline", "rect", "regular-polygon"], "ruby":["ruby", "ruby-text"], "section":["alphabetical-index", "bibliography", "illustration-index", "index-title", "object-index", "section", "table-of-content", "table-index", "user-index"], "table":["background", "table"], "table-cell":["body", "covered-table-cell", "even-columns", "even-rows", "first-column", "first-row", "last-column", "last-row", "odd-columns", "odd-rows", "table-cell"], 
-  "table-column":["table-column"], "table-row":["table-row"], "text":["a", "index-entry-chapter", "index-entry-link-end", "index-entry-link-start", "index-entry-page-number", "index-entry-span", "index-entry-tab-stop", "index-entry-text", "index-title-template", "linenumbering-configuration", "list-level-style-number", "list-level-style-bullet", "outline-level-style", "span"], "list":["list-item"]}, textPropertySimpleMapping = [[fons, "color", "color"], [fons, "background-color", "background-color"], 
-  [fons, "font-weight", "font-weight"], [fons, "font-style", "font-style"], [fons, "font-size", "font-size"]], bgImageSimpleMapping = [[stylens, "repeat", "background-repeat"]], paragraphPropertySimpleMapping = [[fons, "background-color", "background-color"], [fons, "text-align", "text-align"], [fons, "padding-left", "padding-left"], [fons, "padding-right", "padding-right"], [fons, "padding-top", "padding-top"], [fons, "padding-bottom", "padding-bottom"], [fons, "border-left", "border-left"], [fons, 
-  "border-right", "border-right"], [fons, "border-top", "border-top"], [fons, "border-bottom", "border-bottom"], [fons, "margin-left", "margin-left"], [fons, "margin-right", "margin-right"], [fons, "margin-top", "margin-top"], [fons, "margin-bottom", "margin-bottom"], [fons, "border", "border"]], graphicPropertySimpleMapping = [[drawns, "fill-color", "background-color"], [drawns, "fill", "background"], [fons, "min-height", "min-height"], [drawns, "stroke", "border"], [svgns, "stroke-color", "border-color"]], 
-  tablecellPropertySimpleMapping = [[fons, "background-color", "background-color"], [fons, "border-left", "border-left"], [fons, "border-right", "border-right"], [fons, "border-top", "border-top"], [fons, "border-bottom", "border-bottom"]];
-  function namespaceResolver(prefix) {
-    return namespaces[prefix] || null
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.DomUtils");
+odf.OdfUtils = function OdfUtils() {
+  var textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", drawns = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0", whitespaceOnly = /^\s*$/, domUtils = new core.DomUtils;
+  function isParagraph(e) {
+    var name = e && e.localName;
+    return(name === "p" || name === "h") && e.namespaceURI === textns
   }
-  function getStyleMap(doc, stylesnode) {
-    var stylemap = {}, node, name, family, map;
+  this.isParagraph = isParagraph;
+  function getParagraphElement(node) {
+    while(node && !isParagraph(node)) {
+      node = node.parentNode
+    }
+    return node
+  }
+  this.getParagraphElement = getParagraphElement;
+  this.isWithinTrackedChanges = function(node, container) {
+    while(node && node !== container) {
+      if(node.namespaceURI === textns && node.localName === "tracked-changes") {
+        return true
+      }
+      node = node.parentNode
+    }
+    return false
+  };
+  this.isListItem = function(e) {
+    var name = e && e.localName;
+    return name === "list-item" && e.namespaceURI === textns
+  };
+  function isODFWhitespace(text) {
+    return/^[ \t\r\n]+$/.test(text)
+  }
+  this.isODFWhitespace = isODFWhitespace;
+  function isGroupingElement(e) {
+    var localName = e && e.localName;
+    if(/^(span|p|h|a|meta)$/.test(localName) && e.namespaceURI === textns || localName === "span" && e.className === "annotationHighlight") {
+      return true
+    }
+    return false
+  }
+  this.isGroupingElement = isGroupingElement;
+  function isCharacterElement(e) {
+    var n = e && e.localName, ns, r = false;
+    if(n) {
+      ns = e.namespaceURI;
+      if(ns === textns) {
+        r = n === "s" || n === "tab" || n === "line-break"
+      }else {
+        if(ns === drawns) {
+          r = n === "frame" && e.getAttributeNS(textns, "anchor-type") === "as-char"
+        }
+      }
+    }
+    return r
+  }
+  this.isCharacterElement = isCharacterElement;
+  function firstChild(node) {
+    while(node.firstChild !== null && isGroupingElement(node)) {
+      node = node.firstChild
+    }
+    return node
+  }
+  this.firstChild = firstChild;
+  function lastChild(node) {
+    while(node.lastChild !== null && isGroupingElement(node)) {
+      node = node.lastChild
+    }
+    return node
+  }
+  this.lastChild = lastChild;
+  function previousNode(node) {
+    while(!isParagraph(node) && node.previousSibling === null) {
+      node = (node.parentNode)
+    }
+    return isParagraph(node) ? null : lastChild((node.previousSibling))
+  }
+  this.previousNode = previousNode;
+  function nextNode(node) {
+    while(!isParagraph(node) && node.nextSibling === null) {
+      node = (node.parentNode)
+    }
+    return isParagraph(node) ? null : firstChild((node.nextSibling))
+  }
+  this.nextNode = nextNode;
+  function scanLeftForNonWhitespace(node) {
+    var r = false;
+    while(node) {
+      if(node.nodeType === Node.TEXT_NODE) {
+        if(node.length === 0) {
+          node = previousNode(node)
+        }else {
+          return!isODFWhitespace(node.data.substr(node.length - 1, 1))
+        }
+      }else {
+        if(isCharacterElement(node)) {
+          r = true;
+          node = null
+        }else {
+          node = previousNode(node)
+        }
+      }
+    }
+    return r
+  }
+  this.scanLeftForNonWhitespace = scanLeftForNonWhitespace;
+  function lookLeftForCharacter(node) {
+    var text, r = 0;
+    if(node.nodeType === Node.TEXT_NODE && node.length > 0) {
+      text = node.data;
+      if(!isODFWhitespace(text.substr(text.length - 1, 1))) {
+        r = 1
+      }else {
+        if(text.length === 1) {
+          r = scanLeftForNonWhitespace(previousNode(node)) ? 2 : 0
+        }else {
+          r = isODFWhitespace(text.substr(text.length - 2, 1)) ? 0 : 2
+        }
+      }
+    }else {
+      if(isCharacterElement(node)) {
+        r = 1
+      }
+    }
+    return r
+  }
+  this.lookLeftForCharacter = lookLeftForCharacter;
+  function lookRightForCharacter(node) {
+    var r = false;
+    if(node && node.nodeType === Node.TEXT_NODE && node.length > 0) {
+      r = !isODFWhitespace(node.data.substr(0, 1))
+    }else {
+      if(isCharacterElement(node)) {
+        r = true
+      }
+    }
+    return r
+  }
+  this.lookRightForCharacter = lookRightForCharacter;
+  function scanLeftForAnyCharacter(node) {
+    var r = false;
+    node = node && lastChild(node);
+    while(node) {
+      if(node.nodeType === Node.TEXT_NODE && node.length > 0 && !isODFWhitespace(node.data)) {
+        r = true;
+        break
+      }
+      if(isCharacterElement(node)) {
+        r = true;
+        break
+      }
+      node = previousNode(node)
+    }
+    return r
+  }
+  this.scanLeftForAnyCharacter = scanLeftForAnyCharacter;
+  function scanRightForAnyCharacter(node) {
+    var r = false;
+    node = node && firstChild(node);
+    while(node) {
+      if(node.nodeType === Node.TEXT_NODE && node.length > 0 && !isODFWhitespace(node.data)) {
+        r = true;
+        break
+      }
+      if(isCharacterElement(node)) {
+        r = true;
+        break
+      }
+      node = nextNode(node)
+    }
+    return r
+  }
+  this.scanRightForAnyCharacter = scanRightForAnyCharacter;
+  function isTrailingWhitespace(textnode, offset) {
+    if(!isODFWhitespace(textnode.data.substr(offset))) {
+      return false
+    }
+    return!scanRightForAnyCharacter(nextNode(textnode))
+  }
+  this.isTrailingWhitespace = isTrailingWhitespace;
+  function isSignificantWhitespace(textNode, offset) {
+    var text = textNode.data, result;
+    if(!isODFWhitespace(text[offset])) {
+      return false
+    }
+    if(isCharacterElement(textNode.parentNode)) {
+      return false
+    }
+    if(offset > 0) {
+      if(!isODFWhitespace(text[offset - 1])) {
+        result = true
+      }
+    }else {
+      if(scanLeftForNonWhitespace(previousNode(textNode))) {
+        result = true
+      }
+    }
+    if(result === true) {
+      return isTrailingWhitespace(textNode, offset) ? false : true
+    }
+    return false
+  }
+  this.isSignificantWhitespace = isSignificantWhitespace;
+  function getFirstNonWhitespaceChild(node) {
+    var child = node.firstChild;
+    while(child && child.nodeType === Node.TEXT_NODE && whitespaceOnly.test(child.nodeValue)) {
+      child = child.nextSibling
+    }
+    return child
+  }
+  this.getFirstNonWhitespaceChild = getFirstNonWhitespaceChild;
+  function parseLength(length) {
+    var re = /-?([0-9]*[0-9][0-9]*(\.[0-9]*)?|0+\.[0-9]*[1-9][0-9]*|\.[0-9]*[1-9][0-9]*)((cm)|(mm)|(in)|(pt)|(pc)|(px)|(%))/, m = re.exec(length);
+    if(!m) {
+      return null
+    }
+    return{value:parseFloat(m[1]), unit:m[3]}
+  }
+  this.parseLength = parseLength;
+  function parsePositiveLength(length) {
+    var result = parseLength(length);
+    if(result && (result.value <= 0 || result.unit === "%")) {
+      return null
+    }
+    return result
+  }
+  function parseNonNegativeLength(length) {
+    var result = parseLength(length);
+    if(result && (result.value < 0 || result.unit === "%")) {
+      return null
+    }
+    return result
+  }
+  function parsePercentage(length) {
+    var result = parseLength(length);
+    if(result && result.unit !== "%") {
+      return null
+    }
+    return result
+  }
+  function parseFoFontSize(fontSize) {
+    return parsePositiveLength(fontSize) || parsePercentage(fontSize)
+  }
+  this.parseFoFontSize = parseFoFontSize;
+  function parseFoLineHeight(lineHeight) {
+    return parseNonNegativeLength(lineHeight) || parsePercentage(lineHeight)
+  }
+  this.parseFoLineHeight = parseFoLineHeight;
+  function getImpactedParagraphs(range) {
+    var outerContainer = (range.commonAncestorContainer), impactedParagraphs = [];
+    if(outerContainer.nodeType === Node.ELEMENT_NODE) {
+      impactedParagraphs = domUtils.getElementsByTagNameNS(outerContainer, textns, "p").concat(domUtils.getElementsByTagNameNS(outerContainer, textns, "h"))
+    }
+    while(outerContainer && !isParagraph(outerContainer)) {
+      outerContainer = outerContainer.parentNode
+    }
+    if(outerContainer) {
+      impactedParagraphs.push(outerContainer)
+    }
+    return impactedParagraphs.filter(function(n) {
+      return domUtils.rangeIntersectsNode(range, n)
+    })
+  }
+  this.getImpactedParagraphs = getImpactedParagraphs;
+  function isAcceptedNode(node) {
+    switch(node.namespaceURI) {
+      case odf.Namespaces.drawns:
+      ;
+      case odf.Namespaces.svgns:
+      ;
+      case odf.Namespaces.dr3dns:
+        return false;
+      case odf.Namespaces.textns:
+        switch(node.localName) {
+          case "note-body":
+          ;
+          case "ruby-text":
+            return false
+        }
+        break;
+      case odf.Namespaces.officens:
+        switch(node.localName) {
+          case "annotation":
+          ;
+          case "binary-data":
+          ;
+          case "event-listeners":
+            return false
+        }
+        break;
+      default:
+        switch(node.localName) {
+          case "editinfo":
+            return false
+        }
+        break
+    }
+    return true
+  }
+  function isSignificantTextContent(textNode) {
+    return Boolean(getParagraphElement(textNode) && (!isODFWhitespace(textNode.textContent) || isSignificantWhitespace(textNode, 0)))
+  }
+  function getTextNodes(range, includePartial) {
+    var document = range.startContainer.ownerDocument, nodeRange = document.createRange(), textNodes;
+    function nodeFilter(node) {
+      nodeRange.selectNodeContents(node);
+      if(node.nodeType === Node.TEXT_NODE) {
+        if(includePartial && domUtils.rangesIntersect(range, nodeRange) || domUtils.containsRange(range, nodeRange)) {
+          return isSignificantTextContent(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+        }
+      }else {
+        if(domUtils.rangesIntersect(range, nodeRange)) {
+          if(isAcceptedNode(node)) {
+            return NodeFilter.FILTER_SKIP
+          }
+        }
+      }
+      return NodeFilter.FILTER_REJECT
+    }
+    textNodes = domUtils.getNodesInRange(range, nodeFilter);
+    nodeRange.detach();
+    return textNodes
+  }
+  this.getTextNodes = getTextNodes;
+  this.getTextElements = function(range, includeInsignificantWhitespace) {
+    var document = range.startContainer.ownerDocument, nodeRange = document.createRange(), elements;
+    function nodeFilter(node) {
+      var nodeType = node.nodeType;
+      nodeRange.selectNodeContents(node);
+      if(nodeType === Node.TEXT_NODE) {
+        if(domUtils.containsRange(range, nodeRange) && (includeInsignificantWhitespace || isSignificantTextContent(node))) {
+          return NodeFilter.FILTER_ACCEPT
+        }
+      }else {
+        if(isCharacterElement(node)) {
+          if(domUtils.containsRange(range, nodeRange)) {
+            return NodeFilter.FILTER_ACCEPT
+          }
+        }else {
+          if(isAcceptedNode(node) || isGroupingElement(node)) {
+            return NodeFilter.FILTER_SKIP
+          }
+        }
+      }
+      return NodeFilter.FILTER_REJECT
+    }
+    elements = domUtils.getNodesInRange(range, nodeFilter);
+    nodeRange.detach();
+    return elements
+  };
+  this.getParagraphElements = function(range) {
+    var document = range.startContainer.ownerDocument, nodeRange = document.createRange(), elements;
+    function nodeFilter(node) {
+      nodeRange.selectNodeContents(node);
+      if(isParagraph(node)) {
+        if(domUtils.rangesIntersect(range, nodeRange)) {
+          return NodeFilter.FILTER_ACCEPT
+        }
+      }else {
+        if(isAcceptedNode(node) || isGroupingElement(node)) {
+          return NodeFilter.FILTER_SKIP
+        }
+      }
+      return NodeFilter.FILTER_REJECT
+    }
+    elements = domUtils.getNodesInRange(range, nodeFilter);
+    nodeRange.detach();
+    return elements
+  }
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("odf.OdfUtils");
+odf.TextSerializer = function TextSerializer() {
+  var self = this, odfUtils = new odf.OdfUtils;
+  function serializeNode(node) {
+    var s = "", accept = self.filter ? self.filter.acceptNode(node) : NodeFilter.FILTER_ACCEPT, nodeType = node.nodeType, child;
+    if(accept === NodeFilter.FILTER_ACCEPT || accept === NodeFilter.FILTER_SKIP) {
+      child = node.firstChild;
+      while(child) {
+        s += serializeNode(child);
+        child = child.nextSibling
+      }
+    }
+    if(accept === NodeFilter.FILTER_ACCEPT) {
+      if(nodeType === Node.ELEMENT_NODE && odfUtils.isParagraph(node)) {
+        s += "\n"
+      }else {
+        if(nodeType === Node.TEXT_NODE && node.textContent) {
+          s += node.textContent
+        }
+      }
+    }
+    return s
+  }
+  this.filter = null;
+  this.writeToString = function(node) {
+    if(!node) {
+      return""
+    }
+    return serializeNode(node)
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.DomUtils");
+runtime.loadClass("core.LoopWatchDog");
+runtime.loadClass("odf.Namespaces");
+odf.TextStyleApplicator = function TextStyleApplicator(newStylePrefix, formatting, automaticStyles) {
+  var domUtils = new core.DomUtils, textns = odf.Namespaces.textns, stylens = odf.Namespaces.stylens, textProperties = "style:text-properties", webodfns = "urn:webodf:names:scope";
+  function StyleLookup(info) {
+    function compare(expected, actual) {
+      if(typeof expected === "object" && typeof actual === "object") {
+        return Object.keys(expected).every(function(key) {
+          return compare(expected[key], actual[key])
+        })
+      }
+      return expected === actual
+    }
+    this.isStyleApplied = function(textNode) {
+      var appliedStyle = formatting.getAppliedStylesForElement(textNode);
+      return compare(info, appliedStyle)
+    }
+  }
+  function StyleManager(info) {
+    var createdStyles = {};
+    function createDirectFormat(existingStyleName, document) {
+      var existingStyleNode, styleNode;
+      if(existingStyleName) {
+        existingStyleNode = formatting.getStyleElement(existingStyleName, "text");
+        if(existingStyleNode.parentNode === automaticStyles) {
+          styleNode = existingStyleNode.cloneNode(true)
+        }else {
+          styleNode = document.createElementNS(stylens, "style:style");
+          styleNode.setAttributeNS(stylens, "style:parent-style-name", existingStyleName);
+          styleNode.setAttributeNS(stylens, "style:family", "text");
+          styleNode.setAttributeNS(webodfns, "scope", "document-content")
+        }
+      }else {
+        styleNode = document.createElementNS(stylens, "style:style");
+        styleNode.setAttributeNS(stylens, "style:family", "text");
+        styleNode.setAttributeNS(webodfns, "scope", "document-content")
+      }
+      formatting.updateStyle(styleNode, info, newStylePrefix);
+      automaticStyles.appendChild(styleNode);
+      return styleNode
+    }
+    function getDirectStyle(existingStyleName, document) {
+      existingStyleName = existingStyleName || "";
+      if(!createdStyles.hasOwnProperty(existingStyleName)) {
+        createdStyles[existingStyleName] = createDirectFormat(existingStyleName, document)
+      }
+      return createdStyles[existingStyleName].getAttributeNS(stylens, "name")
+    }
+    this.applyStyleToContainer = function(container) {
+      var name = getDirectStyle(container.getAttributeNS(textns, "style-name"), container.ownerDocument);
+      container.setAttributeNS(textns, "text:style-name", name)
+    }
+  }
+  function isTextSpan(node) {
+    return node.localName === "span" && node.namespaceURI === textns
+  }
+  function moveToNewSpan(startNode, limits) {
+    var document = startNode.ownerDocument, originalContainer = (startNode.parentNode), styledContainer, trailingContainer, moveTrailing, node = startNode, nextNode, loopGuard = new core.LoopWatchDog(1E3);
+    if(!isTextSpan(originalContainer)) {
+      styledContainer = document.createElementNS(textns, "text:span");
+      originalContainer.insertBefore(styledContainer, startNode);
+      moveTrailing = false
+    }else {
+      if(startNode.previousSibling && !domUtils.rangeContainsNode(limits, startNode.previousSibling)) {
+        styledContainer = originalContainer.cloneNode(false);
+        originalContainer.parentNode.insertBefore(styledContainer, originalContainer.nextSibling);
+        moveTrailing = true
+      }else {
+        styledContainer = originalContainer;
+        moveTrailing = true
+      }
+    }
+    while(node && (node === startNode || domUtils.rangeContainsNode(limits, node))) {
+      loopGuard.check();
+      nextNode = node.nextSibling;
+      if(node.parentNode !== styledContainer) {
+        styledContainer.appendChild(node)
+      }
+      node = nextNode
+    }
+    if(node && moveTrailing) {
+      trailingContainer = styledContainer.cloneNode(false);
+      styledContainer.parentNode.insertBefore(trailingContainer, styledContainer.nextSibling);
+      while(node) {
+        loopGuard.check();
+        nextNode = node.nextSibling;
+        trailingContainer.appendChild(node);
+        node = nextNode
+      }
+    }
+    return(styledContainer)
+  }
+  this.applyStyle = function(textNodes, limits, info) {
+    var textPropsOnly = {}, isStyled, container, styleCache, styleLookup;
+    runtime.assert(info && info[textProperties], "applyStyle without any text properties");
+    textPropsOnly[textProperties] = info[textProperties];
+    styleCache = new StyleManager(textPropsOnly);
+    styleLookup = new StyleLookup(textPropsOnly);
+    textNodes.forEach(function(n) {
+      isStyled = styleLookup.isStyleApplied(n);
+      if(isStyled === false) {
+        container = moveToNewSpan((n), limits);
+        styleCache.applyStyleToContainer(container)
+      }
+    })
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("odf.Namespaces");
+runtime.loadClass("odf.OdfUtils");
+runtime.loadClass("xmldom.XPath");
+runtime.loadClass("core.CSSUnits");
+odf.Style2CSS = function Style2CSS() {
+  var drawns = odf.Namespaces.drawns, fons = odf.Namespaces.fons, stylens = odf.Namespaces.stylens, svgns = odf.Namespaces.svgns, textns = odf.Namespaces.textns, xlinkns = odf.Namespaces.xlinkns, presentationns = odf.Namespaces.presentationns, familynamespaceprefixes = {"graphic":"draw", "drawing-page":"draw", "paragraph":"text", "presentation":"presentation", "ruby":"text", "section":"text", "table":"table", "table-cell":"table", "table-column":"table", "table-row":"table", "text":"text", "list":"text", 
+  "page":"office"}, familytagnames = {"graphic":["circle", "connected", "control", "custom-shape", "ellipse", "frame", "g", "line", "measure", "page", "page-thumbnail", "path", "polygon", "polyline", "rect", "regular-polygon"], "paragraph":["alphabetical-index-entry-template", "h", "illustration-index-entry-template", "index-source-style", "object-index-entry-template", "p", "table-index-entry-template", "table-of-content-entry-template", "user-index-entry-template"], "presentation":["caption", "circle", 
+  "connector", "control", "custom-shape", "ellipse", "frame", "g", "line", "measure", "page-thumbnail", "path", "polygon", "polyline", "rect", "regular-polygon"], "drawing-page":["caption", "circle", "connector", "control", "page", "custom-shape", "ellipse", "frame", "g", "line", "measure", "page-thumbnail", "path", "polygon", "polyline", "rect", "regular-polygon"], "ruby":["ruby", "ruby-text"], "section":["alphabetical-index", "bibliography", "illustration-index", "index-title", "object-index", 
+  "section", "table-of-content", "table-index", "user-index"], "table":["background", "table"], "table-cell":["body", "covered-table-cell", "even-columns", "even-rows", "first-column", "first-row", "last-column", "last-row", "odd-columns", "odd-rows", "table-cell"], "table-column":["table-column"], "table-row":["table-row"], "text":["a", "index-entry-chapter", "index-entry-link-end", "index-entry-link-start", "index-entry-page-number", "index-entry-span", "index-entry-tab-stop", "index-entry-text", 
+  "index-title-template", "linenumbering-configuration", "list-level-style-number", "list-level-style-bullet", "outline-level-style", "span"], "list":["list-item"]}, textPropertySimpleMapping = [[fons, "color", "color"], [fons, "background-color", "background-color"], [fons, "font-weight", "font-weight"], [fons, "font-style", "font-style"]], bgImageSimpleMapping = [[stylens, "repeat", "background-repeat"]], paragraphPropertySimpleMapping = [[fons, "background-color", "background-color"], [fons, "text-align", 
+  "text-align"], [fons, "text-indent", "text-indent"], [fons, "padding", "padding"], [fons, "padding-left", "padding-left"], [fons, "padding-right", "padding-right"], [fons, "padding-top", "padding-top"], [fons, "padding-bottom", "padding-bottom"], [fons, "border-left", "border-left"], [fons, "border-right", "border-right"], [fons, "border-top", "border-top"], [fons, "border-bottom", "border-bottom"], [fons, "margin", "margin"], [fons, "margin-left", "margin-left"], [fons, "margin-right", "margin-right"], 
+  [fons, "margin-top", "margin-top"], [fons, "margin-bottom", "margin-bottom"], [fons, "border", "border"]], graphicPropertySimpleMapping = [[fons, "background-color", "background-color"], [fons, "min-height", "min-height"], [drawns, "stroke", "border"], [svgns, "stroke-color", "border-color"], [svgns, "stroke-width", "border-width"]], tablecellPropertySimpleMapping = [[fons, "background-color", "background-color"], [fons, "border-left", "border-left"], [fons, "border-right", "border-right"], [fons, 
+  "border-top", "border-top"], [fons, "border-bottom", "border-bottom"], [fons, "border", "border"]], tablecolumnPropertySimpleMapping = [[stylens, "column-width", "width"]], tablerowPropertySimpleMapping = [[stylens, "row-height", "height"], [fons, "keep-together", null]], tablePropertySimpleMapping = [[stylens, "width", "width"], [fons, "margin-left", "margin-left"], [fons, "margin-right", "margin-right"], [fons, "margin-top", "margin-top"], [fons, "margin-bottom", "margin-bottom"]], pageContentPropertySimpleMapping = 
+  [[fons, "background-color", "background-color"], [fons, "padding", "padding"], [fons, "padding-left", "padding-left"], [fons, "padding-right", "padding-right"], [fons, "padding-top", "padding-top"], [fons, "padding-bottom", "padding-bottom"], [fons, "border", "border"], [fons, "border-left", "border-left"], [fons, "border-right", "border-right"], [fons, "border-top", "border-top"], [fons, "border-bottom", "border-bottom"], [fons, "margin", "margin"], [fons, "margin-left", "margin-left"], [fons, 
+  "margin-right", "margin-right"], [fons, "margin-top", "margin-top"], [fons, "margin-bottom", "margin-bottom"]], pageSizePropertySimpleMapping = [[fons, "page-width", "width"], [fons, "page-height", "height"]], fontFaceDeclsMap = {}, utils = new odf.OdfUtils, documentType, odfRoot, defaultFontSize, xpath = new xmldom.XPath, cssUnits = new core.CSSUnits;
+  function getStyleMap(stylesnode) {
+    var stylemap = {}, node, name, family, style;
     if(!stylesnode) {
       return stylemap
     }
     node = stylesnode.firstChild;
     while(node) {
-      if(node.namespaceURI === stylens && node.localName === "style") {
+      if(node.namespaceURI === stylens && (node.localName === "style" || node.localName === "default-style")) {
         family = node.getAttributeNS(stylens, "family")
       }else {
         if(node.namespaceURI === textns && node.localName === "list-style") {
           family = "list"
+        }else {
+          if(node.namespaceURI === stylens && (node.localName === "page-layout" || node.localName === "default-page-layout")) {
+            family = "page"
+          }else {
+            family = undefined
+          }
         }
       }
-      name = family && node.getAttributeNS && node.getAttributeNS(stylens, "name");
-      if(name) {
-        if(!stylemap[family]) {
-          stylemap[family] = {}
+      if(family) {
+        name = node.getAttributeNS && node.getAttributeNS(stylens, "name");
+        if(!name) {
+          name = ""
         }
-        stylemap[family][name] = node
+        style = stylemap[family] = stylemap[family] || {};
+        style[name] = node
       }
       node = node.nextSibling
     }
@@ -5234,7 +6948,7 @@ odf.Style2CSS = function Style2CSS() {
     if(stylestree[name]) {
       return stylestree[name]
     }
-    var derivedStyles = stylestree.derivedStyles, n, style;
+    var n, style;
     for(n in stylestree) {
       if(stylestree.hasOwnProperty(n)) {
         style = findStyle(stylestree[n].derivedStyles, name);
@@ -5279,16 +6993,25 @@ odf.Style2CSS = function Style2CSS() {
     }
   }
   function createSelector(family, name) {
-    var prefix = familynamespaceprefixes[family], namepart, selector = "", first = true;
+    var prefix = familynamespaceprefixes[family], namepart, selector;
     if(prefix === null) {
       return null
     }
-    namepart = "[" + prefix + '|style-name="' + name + '"]';
+    if(name) {
+      namepart = "[" + prefix + '|style-name="' + name + '"]'
+    }else {
+      namepart = "[" + prefix + "|style-name]"
+    }
     if(prefix === "presentation") {
       prefix = "draw";
-      namepart = '[presentation|style-name="' + name + '"]'
+      if(name) {
+        namepart = '[presentation|style-name="' + name + '"]'
+      }else {
+        namepart = "[presentation|style-name]"
+      }
     }
-    return prefix + "|" + familytagnames[family].join(namepart + "," + prefix + "|") + namepart
+    selector = prefix + "|" + familytagnames[family].join(namepart + "," + prefix + "|") + namepart;
+    return selector
   }
   function getSelectors(family, name, node) {
     var selectors = [], n, ss, s;
@@ -5312,7 +7035,7 @@ odf.Style2CSS = function Style2CSS() {
     var c = node.firstChild, e;
     while(c) {
       if(c.namespaceURI === ns && c.localName === name) {
-        e = c;
+        e = (c);
         return e
       }
       c = c.nextSibling
@@ -5325,54 +7048,160 @@ odf.Style2CSS = function Style2CSS() {
       if(mapping.hasOwnProperty(r)) {
         r = mapping[r];
         value = props.getAttributeNS(r[0], r[1]);
-        if(value) {
+        if(r[2] && value) {
           rule += r[2] + ":" + value + ";"
         }
       }
     }
     return rule
   }
-  function getFontDeclaration(name) {
-    return'"' + name + '"'
+  function getFontSize(styleNode) {
+    var props = getDirectChild((styleNode), stylens, "text-properties");
+    if(props) {
+      return utils.parseFoFontSize(props.getAttributeNS(fons, "font-size"))
+    }
+    return null
+  }
+  function getParentStyleNode(styleNode) {
+    var parentStyleName = "", parentStyleFamily = "", parentStyleNode = null, xp;
+    if(styleNode.localName === "default-style") {
+      return null
+    }
+    parentStyleName = styleNode.getAttributeNS(stylens, "parent-style-name");
+    parentStyleFamily = styleNode.getAttributeNS(stylens, "family");
+    if(parentStyleName) {
+      xp = "//style:*[@style:name='" + parentStyleName + "'][@style:family='" + parentStyleFamily + "']"
+    }else {
+      xp = "//style:default-style[@style:family='" + parentStyleFamily + "']"
+    }
+    parentStyleNode = xpath.getODFElementsWithXPath((odfRoot), xp, odf.Namespaces.resolvePrefix)[0];
+    return parentStyleNode
   }
   function getTextProperties(props) {
-    var rule = "", value;
+    var rule = "", fontName, fontSize, value, textDecoration = "", fontSizeRule = "", sizeMultiplier = 1, parentStyle;
     rule += applySimpleMapping(props, textPropertySimpleMapping);
     value = props.getAttributeNS(stylens, "text-underline-style");
     if(value === "solid") {
-      rule += "text-decoration: underline;"
+      textDecoration += " underline"
     }
-    value = props.getAttributeNS(stylens, "font-name");
-    if(value) {
-      value = getFontDeclaration(value);
-      if(value) {
-        rule += "font-family: " + value + ";"
+    value = props.getAttributeNS(stylens, "text-line-through-style");
+    if(value === "solid") {
+      textDecoration += " line-through"
+    }
+    if(textDecoration.length) {
+      textDecoration = "text-decoration:" + textDecoration + ";";
+      rule += textDecoration
+    }
+    fontName = props.getAttributeNS(stylens, "font-name") || props.getAttributeNS(fons, "font-family");
+    if(fontName) {
+      value = fontFaceDeclsMap[fontName];
+      rule += "font-family: " + (value || fontName) + ", sans-serif;"
+    }
+    parentStyle = props.parentNode;
+    fontSize = getFontSize((parentStyle));
+    if(!fontSize) {
+      return rule
+    }
+    while(parentStyle) {
+      fontSize = getFontSize((parentStyle));
+      if(fontSize) {
+        if(fontSize.unit !== "%") {
+          fontSizeRule = "font-size: " + fontSize.value * sizeMultiplier + fontSize.unit + ";";
+          break
+        }
+        sizeMultiplier *= fontSize.value / 100
       }
+      parentStyle = getParentStyleNode(parentStyle)
     }
+    if(!fontSizeRule) {
+      fontSizeRule = "font-size: " + parseFloat(defaultFontSize) * sizeMultiplier + cssUnits.getUnits(defaultFontSize) + ";"
+    }
+    rule += fontSizeRule;
     return rule
   }
   function getParagraphProperties(props) {
-    var rule = "", imageProps, url, element;
+    var rule = "", imageProps, url, element, lineHeight;
     rule += applySimpleMapping(props, paragraphPropertySimpleMapping);
     imageProps = props.getElementsByTagNameNS(stylens, "background-image");
     if(imageProps.length > 0) {
       url = imageProps.item(0).getAttributeNS(xlinkns, "href");
       if(url) {
         rule += "background-image: url('odfkit:" + url + "');";
-        element = imageProps.item(0);
+        element = (imageProps.item(0));
         rule += applySimpleMapping(element, bgImageSimpleMapping)
+      }
+    }
+    lineHeight = props.getAttributeNS(fons, "line-height");
+    if(lineHeight && lineHeight !== "normal") {
+      lineHeight = utils.parseFoLineHeight(lineHeight);
+      if(lineHeight.unit !== "%") {
+        rule += "line-height: " + lineHeight.value + lineHeight.unit + ";"
+      }else {
+        rule += "line-height: " + lineHeight.value / 100 + ";"
       }
     }
     return rule
   }
+  function hexToRgb(hex) {
+    var result, shorthandRegex = /^#?([a-f\d])([a-f\d])([a-f\d])$/i;
+    hex = hex.replace(shorthandRegex, function(m, r, g, b) {
+      return r + r + g + g + b + b
+    });
+    result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {r:parseInt(result[1], 16), g:parseInt(result[2], 16), b:parseInt(result[3], 16)} : null
+  }
+  function isNumber(n) {
+    return!isNaN(parseFloat(n))
+  }
   function getGraphicProperties(props) {
+    var rule = "", alpha, bgcolor, fill;
+    rule += applySimpleMapping(props, graphicPropertySimpleMapping);
+    alpha = props.getAttributeNS(drawns, "opacity");
+    fill = props.getAttributeNS(drawns, "fill");
+    bgcolor = props.getAttributeNS(drawns, "fill-color");
+    if(fill === "solid" || fill === "hatch") {
+      if(bgcolor && bgcolor !== "none") {
+        alpha = isNumber(alpha) ? parseFloat(alpha) / 100 : 1;
+        bgcolor = hexToRgb(bgcolor);
+        if(bgcolor) {
+          rule += "background-color: rgba(" + bgcolor.r + "," + bgcolor.g + "," + bgcolor.b + "," + alpha + ");"
+        }
+      }else {
+        rule += "background: none;"
+      }
+    }else {
+      if(fill === "none") {
+        rule += "background: none;"
+      }
+    }
+    return rule
+  }
+  function getDrawingPageProperties(props) {
     var rule = "";
     rule += applySimpleMapping(props, graphicPropertySimpleMapping);
+    if(props.getAttributeNS(presentationns, "background-visible") === "true") {
+      rule += "background: none;"
+    }
     return rule
   }
   function getTableCellProperties(props) {
     var rule = "";
     rule += applySimpleMapping(props, tablecellPropertySimpleMapping);
+    return rule
+  }
+  function getTableRowProperties(props) {
+    var rule = "";
+    rule += applySimpleMapping(props, tablerowPropertySimpleMapping);
+    return rule
+  }
+  function getTableColumnProperties(props) {
+    var rule = "";
+    rule += applySimpleMapping(props, tablecolumnPropertySimpleMapping);
+    return rule
+  }
+  function getTableProperties(props) {
+    var rule = "";
+    rule += applySimpleMapping(props, tablePropertySimpleMapping);
     return rule
   }
   function addStyleRule(sheet, family, name, node) {
@@ -5388,9 +7217,25 @@ odf.Style2CSS = function Style2CSS() {
     if(properties) {
       rule += getGraphicProperties(properties)
     }
+    properties = getDirectChild(node, stylens, "drawing-page-properties");
+    if(properties) {
+      rule += getDrawingPageProperties(properties)
+    }
     properties = getDirectChild(node, stylens, "table-cell-properties");
     if(properties) {
       rule += getTableCellProperties(properties)
+    }
+    properties = getDirectChild(node, stylens, "table-row-properties");
+    if(properties) {
+      rule += getTableRowProperties(properties)
+    }
+    properties = getDirectChild(node, stylens, "table-column-properties");
+    if(properties) {
+      rule += getTableColumnProperties(properties)
+    }
+    properties = getDirectChild(node, stylens, "table-properties");
+    if(properties) {
+      rule += getTableProperties(properties)
     }
     if(rule.length === 0) {
       return
@@ -5403,8 +7248,7 @@ odf.Style2CSS = function Style2CSS() {
     }
   }
   function getNumberRule(node) {
-    var style = node.getAttributeNS(stylens, "num-format"), suffix = node.getAttributeNS(stylens, "num-suffix"), prefix = node.getAttributeNS(stylens, "num-prefix"), rule = "", stylemap = {1:"decimal", "a":"lower-latin", "A":"upper-latin", "i":"lower-roman", "I":"upper-roman"}, content = "";
-    content = prefix || "";
+    var style = node.getAttributeNS(stylens, "num-format"), suffix = node.getAttributeNS(stylens, "num-suffix"), prefix = node.getAttributeNS(stylens, "num-prefix"), stylemap = {1:"decimal", "a":"lower-latin", "A":"upper-latin", "i":"lower-roman", "I":"upper-roman"}, content = prefix || "";
     if(stylemap.hasOwnProperty(style)) {
       content += " counter(list, " + stylemap[style] + ")"
     }else {
@@ -5417,44 +7261,109 @@ odf.Style2CSS = function Style2CSS() {
     if(suffix) {
       content += " '" + suffix + "'"
     }
-    rule = "content: " + content + ";";
-    return rule
+    return"content: " + content + ";"
   }
-  function getImageRule(node) {
+  function getImageRule() {
     var rule = "content: none;";
     return rule
   }
   function getBulletRule(node) {
-    var rule = "", bulletChar = node.getAttributeNS(textns, "bullet-char");
+    var bulletChar = node.getAttributeNS(textns, "bullet-char");
     return"content: '" + bulletChar + "';"
   }
   function addListStyleRule(sheet, name, node, itemrule) {
-    var selector = 'text|list[text|style-name="' + name + '"]', level = node.getAttributeNS(textns, "level"), rule = "";
+    var selector = 'text|list[text|style-name="' + name + '"]', level = node.getAttributeNS(textns, "level"), itemSelector, listItemRule, listLevelProps = utils.getFirstNonWhitespaceChild(node), listLevelLabelAlign = utils.getFirstNonWhitespaceChild(listLevelProps), labelAlignAttr, bulletIndent, listIndent, bulletWidth, rule;
+    if(listLevelLabelAlign) {
+      labelAlignAttr = listLevelLabelAlign.attributes;
+      bulletIndent = labelAlignAttr["fo:text-indent"] ? labelAlignAttr["fo:text-indent"].value : undefined;
+      listIndent = labelAlignAttr["fo:margin-left"] ? labelAlignAttr["fo:margin-left"].value : undefined
+    }
+    if(!bulletIndent) {
+      bulletIndent = "-0.6cm"
+    }
+    if(bulletIndent.charAt(0) === "-") {
+      bulletWidth = bulletIndent.substring(1)
+    }else {
+      bulletWidth = "-" + bulletIndent
+    }
     level = level && parseInt(level, 10);
     while(level > 1) {
       selector += " > text|list-item > text|list";
       level -= 1
     }
-    selector += " > list-item:before";
+    itemSelector = selector;
+    itemSelector += " > text|list-item > *:not(text|list):first-child";
+    if(listIndent !== undefined) {
+      listItemRule = itemSelector + "{margin-left:" + listIndent + ";}";
+      sheet.insertRule(listItemRule, sheet.cssRules.length)
+    }
+    selector += " > text|list-item > *:not(text|list):first-child:before";
     rule = itemrule;
-    rule = selector + "{" + rule + "}";
+    rule = selector + "{" + rule + ";";
+    rule += "counter-increment:list;";
+    rule += "margin-left:" + bulletIndent + ";";
+    rule += "width:" + bulletWidth + ";";
+    rule += "display:inline-block}";
     try {
       sheet.insertRule(rule, sheet.cssRules.length)
     }catch(e) {
       throw e;
     }
   }
+  function addPageStyleRules(sheet, node) {
+    var rule = "", imageProps, url, element, contentLayoutRule = "", pageSizeRule = "", props = node.getElementsByTagNameNS(stylens, "page-layout-properties")[0], masterStyles = props.parentNode.parentNode.parentNode.masterStyles, masterPages, masterStyleName = "", i;
+    rule += applySimpleMapping(props, pageContentPropertySimpleMapping);
+    imageProps = props.getElementsByTagNameNS(stylens, "background-image");
+    if(imageProps.length > 0) {
+      url = imageProps.item(0).getAttributeNS(xlinkns, "href");
+      if(url) {
+        rule += "background-image: url('odfkit:" + url + "');";
+        element = (imageProps.item(0));
+        rule += applySimpleMapping(element, bgImageSimpleMapping)
+      }
+    }
+    if(documentType === "presentation") {
+      if(masterStyles) {
+        masterPages = masterStyles.getElementsByTagNameNS(stylens, "master-page");
+        for(i = 0;i < masterPages.length;i += 1) {
+          if(masterPages[i].getAttributeNS(stylens, "page-layout-name") === props.parentNode.getAttributeNS(stylens, "name")) {
+            masterStyleName = masterPages[i].getAttributeNS(stylens, "name");
+            contentLayoutRule = "draw|page[draw|master-page-name=" + masterStyleName + "] {" + rule + "}";
+            pageSizeRule = "office|body, draw|page[draw|master-page-name=" + masterStyleName + "] {" + applySimpleMapping(props, pageSizePropertySimpleMapping) + " }";
+            try {
+              sheet.insertRule(contentLayoutRule, sheet.cssRules.length);
+              sheet.insertRule(pageSizeRule, sheet.cssRules.length)
+            }catch(e1) {
+              throw e1;
+            }
+          }
+        }
+      }
+    }else {
+      if(documentType === "text") {
+        contentLayoutRule = "office|text {" + rule + "}";
+        rule = "";
+        pageSizeRule = "office|body {" + "width: " + props.getAttributeNS(fons, "page-width") + ";" + "}";
+        try {
+          sheet.insertRule(contentLayoutRule, sheet.cssRules.length);
+          sheet.insertRule(pageSizeRule, sheet.cssRules.length)
+        }catch(e2) {
+          throw e2;
+        }
+      }
+    }
+  }
   function addListStyleRules(sheet, name, node) {
     var n = node.firstChild, e, itemrule;
     while(n) {
       if(n.namespaceURI === textns) {
-        e = n;
+        e = (n);
         if(n.localName === "list-level-style-number") {
           itemrule = getNumberRule(e);
           addListStyleRule(sheet, name, e, itemrule)
         }else {
           if(n.localName === "list-level-style-image") {
-            itemrule = getImageRule(e);
+            itemrule = getImageRule();
             addListStyleRule(sheet, name, e, itemrule)
           }else {
             if(n.localName === "list-level-style-bullet") {
@@ -5471,7 +7380,11 @@ odf.Style2CSS = function Style2CSS() {
     if(family === "list") {
       addListStyleRules(sheet, name, node)
     }else {
-      addStyleRule(sheet, family, name, node)
+      if(family === "page") {
+        addPageStyleRules(sheet, node)
+      }else {
+        addStyleRule(sheet, family, name, node)
+      }
     }
   }
   function addRules(sheet, family, name, node) {
@@ -5483,35 +7396,35 @@ odf.Style2CSS = function Style2CSS() {
       }
     }
   }
-  this.namespaces = namespaces;
-  this.namespaceResolver = namespaceResolver;
-  this.namespaceResolver.lookupNamespaceURI = this.namespaceResolver;
-  this.style2css = function(stylesheet, styles, autostyles) {
-    var doc, prefix, styletree, tree, name, rule, family, stylenodes, styleautonodes;
+  this.style2css = function(doctype, stylesheet, fontFaceMap, styles, autostyles) {
+    var doc, styletree, tree, name, rule, family, stylenodes, styleautonodes;
     while(stylesheet.cssRules.length) {
       stylesheet.deleteRule(stylesheet.cssRules.length - 1)
     }
     doc = null;
     if(styles) {
-      doc = styles.ownerDocument
+      doc = styles.ownerDocument;
+      odfRoot = styles.parentNode
     }
     if(autostyles) {
-      doc = autostyles.ownerDocument
+      doc = autostyles.ownerDocument;
+      odfRoot = autostyles.parentNode
     }
     if(!doc) {
       return
     }
-    for(prefix in namespaces) {
-      if(namespaces.hasOwnProperty(prefix)) {
-        rule = "@namespace " + prefix + " url(" + namespaces[prefix] + ");";
-        try {
-          stylesheet.insertRule(rule, stylesheet.cssRules.length)
-        }catch(e) {
-        }
+    odf.Namespaces.forEachPrefix(function(prefix, ns) {
+      rule = "@namespace " + prefix + " url(" + ns + ");";
+      try {
+        stylesheet.insertRule(rule, stylesheet.cssRules.length)
+      }catch(ignore) {
       }
-    }
-    stylenodes = getStyleMap(doc, styles);
-    styleautonodes = getStyleMap(doc, autostyles);
+    });
+    fontFaceDeclsMap = fontFaceMap;
+    documentType = doctype;
+    defaultFontSize = runtime.getWindow().getComputedStyle(document.body, null).getPropertyValue("font-size") || "12pt";
+    stylenodes = getStyleMap(styles);
+    styleautonodes = getStyleMap(autostyles);
     styletree = {};
     for(family in familynamespaceprefixes) {
       if(familynamespaceprefixes.hasOwnProperty(family)) {
@@ -5528,91 +7441,25 @@ odf.Style2CSS = function Style2CSS() {
   }
 };
 runtime.loadClass("core.Base64");
-runtime.loadClass("xmldom.XPath");
-runtime.loadClass("odf.Style2CSS");
-odf.FontLoader = function() {
-  var style2CSS = new odf.Style2CSS, xpath = new xmldom.XPath, base64 = new core.Base64;
-  function getEmbeddedFontDeclarations(fontFaceDecls) {
-    var decls = {}, fonts, i, font, name, uris, href;
-    if(!fontFaceDecls) {
-      return decls
-    }
-    fonts = xpath.getODFElementsWithXPath(fontFaceDecls, "style:font-face[svg:font-face-src]", style2CSS.namespaceResolver);
-    for(i = 0;i < fonts.length;i += 1) {
-      font = fonts[i];
-      name = font.getAttributeNS(style2CSS.namespaces["style"], "name");
-      uris = xpath.getODFElementsWithXPath(font, "svg:font-face-src/svg:font-face-uri", style2CSS.namespaceResolver);
-      if(uris.length > 0) {
-        href = uris[0].getAttributeNS(style2CSS.namespaces["xlink"], "href");
-        decls[name] = {href:href}
-      }
-    }
-    return decls
-  }
-  function addFontToCSS(name, font, fontdata, stylesheet) {
-    stylesheet = document.styleSheets[0];
-    var rule = '@font-face { font-family: "' + name + '"; src: ' + "url(data:application/x-font-ttf;charset=binary;base64," + base64.convertUTF8ArrayToBase64(fontdata) + ') format("truetype"); }';
-    try {
-      stylesheet.insertRule(rule, stylesheet.cssRules.length)
-    }catch(e) {
-      runtime.log("Problem inserting rule in CSS: " + rule)
-    }
-  }
-  function loadFontIntoCSS(embeddedFontDeclarations, zip, pos, stylesheet, callback) {
-    var name, i = 0, n;
-    for(n in embeddedFontDeclarations) {
-      if(embeddedFontDeclarations.hasOwnProperty(n)) {
-        if(i === pos) {
-          name = n
-        }
-        i += 1
-      }
-    }
-    if(!name) {
-      return callback()
-    }
-    zip.load(embeddedFontDeclarations[name].href, function(err, fontdata) {
-      if(err) {
-        runtime.log(err)
-      }else {
-        addFontToCSS(name, embeddedFontDeclarations[name], fontdata, stylesheet)
-      }
-      return loadFontIntoCSS(embeddedFontDeclarations, zip, pos + 1, stylesheet, callback)
-    })
-  }
-  function loadFontsIntoCSS(embeddedFontDeclarations, zip, stylesheet) {
-    loadFontIntoCSS(embeddedFontDeclarations, zip, 0, stylesheet, function() {
-    })
-  }
-  odf.FontLoader = function FontLoader() {
-    var self = this;
-    this.loadFonts = function(fontFaceDecls, zip, stylesheet) {
-      var embeddedFontDeclarations = getEmbeddedFontDeclarations(fontFaceDecls);
-      loadFontsIntoCSS(embeddedFontDeclarations, zip, stylesheet)
-    }
-  };
-  return odf.FontLoader
-}();
-runtime.loadClass("core.Base64");
 runtime.loadClass("core.Zip");
 runtime.loadClass("xmldom.LSSerializer");
 runtime.loadClass("odf.StyleInfo");
-runtime.loadClass("odf.Style2CSS");
-runtime.loadClass("odf.FontLoader");
+runtime.loadClass("odf.Namespaces");
+runtime.loadClass("odf.OdfNodeFilter");
 odf.OdfContainer = function() {
-  var styleInfo = new odf.StyleInfo, style2CSS = new odf.Style2CSS, namespaces = style2CSS.namespaces, officens = "urn:oasis:names:tc:opendocument:xmlns:office:1.0", manifestns = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0", nodeorder = ["meta", "settings", "scripts", "font-face-decls", "styles", "automatic-styles", "master-styles", "body"], base64 = new core.Base64, fontLoader = new odf.FontLoader, partMimetypes = {};
+  var styleInfo = new odf.StyleInfo, officens = "urn:oasis:names:tc:opendocument:xmlns:office:1.0", manifestns = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0", webodfns = "urn:webodf:names:scope", nodeorder = ["meta", "settings", "scripts", "font-face-decls", "styles", "automatic-styles", "master-styles", "body"], automaticStylePrefix = (new Date).getTime() + "_webodf_", base64 = new core.Base64, documentStylesScope = "document-styles", documentContentScope = "document-content";
   function getDirectChild(node, ns, name) {
     node = node ? node.firstChild : null;
     while(node) {
       if(node.localName === name && node.namespaceURI === ns) {
-        return node
+        return(node)
       }
       node = node.nextSibling
     }
     return null
   }
   function getNodePosition(child) {
-    var childpos = 0, i, l = nodeorder.length;
+    var i, l = nodeorder.length;
     for(i = 0;i < l;i += 1) {
       if(child.namespaceURI === officens && child.localName === nodeorder[i]) {
         return i
@@ -5620,25 +7467,26 @@ odf.OdfContainer = function() {
     }
     return-1
   }
-  function OdfNodeFilter(odfroot, usedStylesElement) {
-    var automaticStyles = odfroot.automaticStyles, usedKeysList;
-    if(usedStylesElement) {
-      usedKeysList = new styleInfo.UsedKeysList(usedStylesElement)
-    }
+  function OdfStylesFilter(styleUsingElementsRoot, automaticStyles) {
+    var usedStyleList = new styleInfo.UsedStyleList(styleUsingElementsRoot, automaticStyles), odfNodeFilter = new odf.OdfNodeFilter;
     this.acceptNode = function(node) {
-      var styleName, styleFamily, result;
-      if(node.namespaceURI === "http://www.w3.org/1999/xhtml") {
-        result = 3
-      }else {
-        if(usedKeysList && node.parentNode === automaticStyles && node.nodeType === 1) {
-          if(usedKeysList.uses(node)) {
-            result = 1
-          }else {
-            result = 2
-          }
+      var result = odfNodeFilter.acceptNode(node);
+      if(result === NodeFilter.FILTER_ACCEPT && node.parentNode === automaticStyles && node.nodeType === Node.ELEMENT_NODE) {
+        if(usedStyleList.uses((node))) {
+          result = NodeFilter.FILTER_ACCEPT
         }else {
-          result = 1
+          result = NodeFilter.FILTER_REJECT
         }
+      }
+      return result
+    }
+  }
+  function OdfContentFilter(styleUsingElementsRoot, automaticStyles) {
+    var odfStylesFilter = new OdfStylesFilter(styleUsingElementsRoot, automaticStyles);
+    this.acceptNode = function(node) {
+      var result = odfStylesFilter.acceptNode(node);
+      if(result === NodeFilter.FILTER_ACCEPT && node.parentNode && node.parentNode.namespaceURI === odf.Namespaces.textns && (node.parentNode.localName === "s" || node.parentNode.localName === "tab")) {
+        result = NodeFilter.FILTER_REJECT
       }
       return result
     }
@@ -5669,8 +7517,8 @@ odf.OdfContainer = function() {
   ODFDocumentElement.prototype.constructor = ODFDocumentElement;
   ODFDocumentElement.namespaceURI = officens;
   ODFDocumentElement.localName = "document";
-  function OdfPart(name, container, zip) {
-    var self = this, privatedata;
+  function OdfPart(name, mimetype, container, zip) {
+    var self = this;
     this.size = 0;
     this.type = null;
     this.name = name;
@@ -5685,9 +7533,14 @@ odf.OdfContainer = function() {
     this.DONE = 2;
     this.state = this.EMPTY;
     this.load = function() {
-      var mimetype = partMimetypes[name];
+      if(zip === null) {
+        return
+      }
       this.mimetype = mimetype;
       zip.loadAsDataURL(name, mimetype, function(err, url) {
+        if(err) {
+          runtime.log(err)
+        }
         self.url = url;
         if(self.onchange) {
           self.onchange(self)
@@ -5696,8 +7549,6 @@ odf.OdfContainer = function() {
           self.onstatereadychange(self)
         }
       })
-    };
-    this.abort = function() {
     }
   }
   OdfPart.prototype.load = function() {
@@ -5708,33 +7559,53 @@ odf.OdfContainer = function() {
     }
     return null
   };
-  function OdfPartList(odfcontainer) {
-    var self = this;
-    this.length = 0;
-    this.item = function(index) {
-    }
-  }
   odf.OdfContainer = function OdfContainer(url, onstatereadychange) {
-    var self = this, zip = null, contentXmlCompletelyLoaded = false;
+    var self = this, zip, partMimetypes = {}, contentElement;
     this.onstatereadychange = onstatereadychange;
     this.onchange = null;
     this.state = null;
     this.rootElement = null;
-    this.parts = null;
     function removeProcessingInstructions(element) {
       var n = element.firstChild, next, e;
       while(n) {
         next = n.nextSibling;
-        if(n.nodeType === 1) {
-          e = n;
+        if(n.nodeType === Node.ELEMENT_NODE) {
+          e = (n);
           removeProcessingInstructions(e)
         }else {
-          if(n.nodeType === 7) {
+          if(n.nodeType === Node.PROCESSING_INSTRUCTION_NODE) {
             element.removeChild(n)
           }
         }
         n = next
       }
+    }
+    function setAutomaticStylesScope(stylesRootElement, scope) {
+      var n = stylesRootElement && stylesRootElement.firstChild;
+      while(n) {
+        if(n.nodeType === Node.ELEMENT_NODE) {
+          n.setAttributeNS(webodfns, "scope", scope)
+        }
+        n = n.nextSibling
+      }
+    }
+    function cloneStylesInScope(stylesRootElement, scope) {
+      var copy = null, n, s, scopeAttrValue;
+      if(stylesRootElement) {
+        copy = stylesRootElement.cloneNode(true);
+        n = copy.firstChild;
+        while(n) {
+          s = n.nextSibling;
+          if(n.nodeType === Node.ELEMENT_NODE) {
+            scopeAttrValue = n.getAttributeNS(webodfns, "scope");
+            if(scopeAttrValue && scopeAttrValue !== scope) {
+              copy.removeChild(n)
+            }
+          }
+          n = s
+        }
+      }
+      return copy
     }
     function importRootNode(xmldoc) {
       var doc = self.rootElement.ownerDocument, node;
@@ -5742,7 +7613,7 @@ odf.OdfContainer = function() {
         removeProcessingInstructions(xmldoc.documentElement);
         try {
           node = doc.importNode(xmldoc.documentElement, true)
-        }catch(e) {
+        }catch(ignore) {
         }
       }
       return node
@@ -5756,19 +7627,23 @@ odf.OdfContainer = function() {
         self.onstatereadychange(self)
       }
     }
-    function handleFlatXml(xmldoc) {
-      var root = importRootNode(xmldoc);
-      if(!root || root.localName !== "document" || root.namespaceURI !== officens) {
-        setState(OdfContainer.INVALID);
-        return
-      }
+    function setRootElement(root) {
+      contentElement = null;
       self.rootElement = root;
       root.fontFaceDecls = getDirectChild(root, officens, "font-face-decls");
       root.styles = getDirectChild(root, officens, "styles");
       root.automaticStyles = getDirectChild(root, officens, "automatic-styles");
       root.masterStyles = getDirectChild(root, officens, "master-styles");
       root.body = getDirectChild(root, officens, "body");
-      root.meta = getDirectChild(root, officens, "meta");
+      root.meta = getDirectChild(root, officens, "meta")
+    }
+    function handleFlatXml(xmldoc) {
+      var root = importRootNode(xmldoc);
+      if(!root || root.localName !== "document" || root.namespaceURI !== officens) {
+        setState(OdfContainer.INVALID);
+        return
+      }
+      setRootElement(root);
       setState(OdfContainer.DONE)
     }
     function handleStylesXml(xmldoc) {
@@ -5782,10 +7657,11 @@ odf.OdfContainer = function() {
       root.styles = getDirectChild(node, officens, "styles");
       setChild(root, root.styles);
       root.automaticStyles = getDirectChild(node, officens, "automatic-styles");
+      setAutomaticStylesScope(root.automaticStyles, documentStylesScope);
       setChild(root, root.automaticStyles);
       root.masterStyles = getDirectChild(node, officens, "master-styles");
       setChild(root, root.masterStyles);
-      fontLoader.loadFonts(root.fontFaceDecls, zip, null)
+      styleInfo.prefixStyleNames(root.automaticStyles, automaticStylePrefix, root.masterStyles)
     }
     function handleContentXml(xmldoc) {
       var node = importRootNode(xmldoc), root, automaticStyles, fontFaceDecls, c;
@@ -5808,6 +7684,7 @@ odf.OdfContainer = function() {
         }
       }
       automaticStyles = getDirectChild(node, officens, "automatic-styles");
+      setAutomaticStylesScope(automaticStyles, documentContentScope);
       if(root.automaticStyles && automaticStyles) {
         c = automaticStyles.firstChild;
         while(c) {
@@ -5850,98 +7727,84 @@ odf.OdfContainer = function() {
       root.manifest = node;
       n = root.manifest.firstChild;
       while(n) {
-        if(n.nodeType === 1 && n.localName === "file-entry" && n.namespaceURI === manifestns) {
+        if(n.nodeType === Node.ELEMENT_NODE && n.localName === "file-entry" && n.namespaceURI === manifestns) {
           partMimetypes[n.getAttributeNS(manifestns, "full-path")] = n.getAttributeNS(manifestns, "media-type")
         }
         n = n.nextSibling
       }
     }
-    function getContentXmlNode(callback) {
-      var handler = {rootElementReady:function(err, rootxml, done) {
-        contentXmlCompletelyLoaded = err || done;
-        if(err) {
-          return callback(err, null)
-        }
-        var parser = new DOMParser;
-        rootxml = parser.parseFromString(rootxml, "text/xml");
-        callback(null, rootxml)
-      }, bodyChildElementsReady:function(err, nodes, done) {
-      }};
-      zip.loadContentXmlAsFragments("content.xml", handler)
-    }
-    function getXmlNode(filepath, callback) {
-      zip.loadAsDOM(filepath, callback)
-    }
-    function loadComponents() {
-      getXmlNode("styles.xml", function(err, xmldoc) {
-        handleStylesXml(xmldoc);
-        if(self.state === OdfContainer.INVALID) {
-          return
-        }
-        getXmlNode("content.xml", function(err, xmldoc) {
-          handleContentXml(xmldoc);
-          if(self.state === OdfContainer.INVALID) {
+    function loadNextComponent(remainingComponents) {
+      var component = remainingComponents.shift(), filepath, callback;
+      if(component) {
+        filepath = (component[0]);
+        callback = (component[1]);
+        zip.loadAsDOM(filepath, function(err, xmldoc) {
+          callback(xmldoc);
+          if(err || self.state === OdfContainer.INVALID) {
             return
           }
-          getXmlNode("meta.xml", function(err, xmldoc) {
-            handleMetaXml(xmldoc);
-            if(self.state === OdfContainer.INVALID) {
-              return
-            }
-            getXmlNode("settings.xml", function(err, xmldoc) {
-              if(xmldoc) {
-                handleSettingsXml(xmldoc)
-              }
-              getXmlNode("META-INF/manifest.xml", function(err, xmldoc) {
-                if(xmldoc) {
-                  handleManifestXml(xmldoc)
-                }
-                if(self.state !== OdfContainer.INVALID) {
-                  setState(OdfContainer.DONE)
-                }
-              })
-            })
-          })
+          loadNextComponent(remainingComponents)
         })
-      })
-    }
-    function documentElement(name, map) {
-      var s = "", i;
-      for(i in map) {
-        if(map.hasOwnProperty(i)) {
-          s += " xmlns:" + i + '="' + map[i] + '"'
-        }
+      }else {
+        setState(OdfContainer.DONE)
       }
+    }
+    function loadComponents() {
+      var componentOrder = [["styles.xml", handleStylesXml], ["content.xml", handleContentXml], ["meta.xml", handleMetaXml], ["settings.xml", handleSettingsXml], ["META-INF/manifest.xml", handleManifestXml]];
+      loadNextComponent(componentOrder)
+    }
+    function createDocumentElement(name) {
+      var s = "";
+      odf.Namespaces.forEachPrefix(function(prefix, ns) {
+        s += " xmlns:" + prefix + '="' + ns + '"'
+      });
       return'<?xml version="1.0" encoding="UTF-8"?><office:' + name + " " + s + ' office:version="1.2">'
     }
     function serializeMetaXml() {
-      var nsmap = style2CSS.namespaces, serializer = new xmldom.LSSerializer, s = documentElement("document-meta", nsmap);
-      serializer.filter = new OdfNodeFilter(self.rootElement);
-      s += serializer.writeToString(self.rootElement.meta, nsmap);
+      var serializer = new xmldom.LSSerializer, s = createDocumentElement("document-meta");
+      serializer.filter = new odf.OdfNodeFilter;
+      s += serializer.writeToString(self.rootElement.meta, odf.Namespaces.namespaceMap);
       s += "</office:document-meta>";
       return s
     }
+    function createManifestEntry(fullPath, mediaType) {
+      var element = document.createElementNS(manifestns, "manifest:file-entry");
+      element.setAttributeNS(manifestns, "manifest:full-path", fullPath);
+      element.setAttributeNS(manifestns, "manifest:media-type", mediaType);
+      return element
+    }
+    function serializeManifestXml() {
+      var header = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n', xml = '<manifest:manifest xmlns:manifest="' + manifestns + '"></manifest:manifest>', manifest = (runtime.parseXML(xml)), manifestRoot = getDirectChild(manifest, manifestns, "manifest"), serializer = new xmldom.LSSerializer, fullPath;
+      for(fullPath in partMimetypes) {
+        if(partMimetypes.hasOwnProperty(fullPath)) {
+          manifestRoot.appendChild(createManifestEntry(fullPath, partMimetypes[fullPath]))
+        }
+      }
+      serializer.filter = new odf.OdfNodeFilter;
+      return header + serializer.writeToString(manifest, odf.Namespaces.namespaceMap)
+    }
     function serializeSettingsXml() {
-      var nsmap = style2CSS.namespaces, serializer = new xmldom.LSSerializer, s = documentElement("document-settings", nsmap);
-      serializer.filter = new OdfNodeFilter(self.rootElement);
-      s += serializer.writeToString(self.rootElement.settings, nsmap);
+      var serializer = new xmldom.LSSerializer, s = createDocumentElement("document-settings");
+      serializer.filter = new odf.OdfNodeFilter;
+      s += serializer.writeToString(self.rootElement.settings, odf.Namespaces.namespaceMap);
       s += "</office:document-settings>";
       return s
     }
     function serializeStylesXml() {
-      var nsmap = style2CSS.namespaces, serializer = new xmldom.LSSerializer, s = documentElement("document-styles", nsmap);
-      serializer.filter = new OdfNodeFilter(self.rootElement, self.rootElement.masterStyles);
+      var nsmap = odf.Namespaces.namespaceMap, serializer = new xmldom.LSSerializer, automaticStyles = cloneStylesInScope(self.rootElement.automaticStyles, documentStylesScope), masterStyles = self.rootElement.masterStyles && self.rootElement.masterStyles.cloneNode(true), s = createDocumentElement("document-styles");
+      styleInfo.removePrefixFromStyleNames(automaticStyles, automaticStylePrefix, masterStyles);
+      serializer.filter = new OdfStylesFilter(masterStyles, automaticStyles);
       s += serializer.writeToString(self.rootElement.fontFaceDecls, nsmap);
       s += serializer.writeToString(self.rootElement.styles, nsmap);
-      s += serializer.writeToString(self.rootElement.automaticStyles, nsmap);
-      s += serializer.writeToString(self.rootElement.masterStyles, nsmap);
+      s += serializer.writeToString(automaticStyles, nsmap);
+      s += serializer.writeToString(masterStyles, nsmap);
       s += "</office:document-styles>";
       return s
     }
     function serializeContentXml() {
-      var nsmap = style2CSS.namespaces, serializer = new xmldom.LSSerializer, s = documentElement("document-content", nsmap);
-      serializer.filter = new OdfNodeFilter(self.rootElement, self.rootElement.body);
-      s += serializer.writeToString(self.rootElement.automaticStyles, nsmap);
+      var nsmap = odf.Namespaces.namespaceMap, serializer = new xmldom.LSSerializer, automaticStyles = cloneStylesInScope(self.rootElement.automaticStyles, documentContentScope), s = createDocumentElement("document-content");
+      serializer.filter = new OdfContentFilter(self.rootElement.body, automaticStyles);
+      s += serializer.writeToString(automaticStyles, nsmap);
       s += serializer.writeToString(self.rootElement.body, nsmap);
       s += "</office:document-content>";
       return s
@@ -5964,39 +7827,99 @@ odf.OdfContainer = function() {
         }
       })
     }
-    this.getPart = function(partname) {
-      return new OdfPart(partname, self, zip)
+    this.setRootElement = setRootElement;
+    this.getContentElement = function() {
+      var body;
+      if(!contentElement) {
+        body = self.rootElement.body;
+        contentElement = body.getElementsByTagNameNS(officens, "text")[0] || body.getElementsByTagNameNS(officens, "presentation")[0] || body.getElementsByTagNameNS(officens, "spreadsheet")[0]
+      }
+      return contentElement
     };
-    this.save = function(callback) {
-      var data;
+    this.getDocumentType = function() {
+      var content = self.getContentElement();
+      return content && content.localName
+    };
+    this.getPart = function(partname) {
+      return new OdfPart(partname, partMimetypes[partname], self, zip)
+    };
+    this.getPartData = function(url, callback) {
+      zip.load(url, callback)
+    };
+    function createEmptyTextDocument() {
+      var emptyzip = new core.Zip("", null), data = runtime.byteArrayFromString("application/vnd.oasis.opendocument.text", "utf8"), root = self.rootElement, text = document.createElementNS(officens, "text");
+      emptyzip.save("mimetype", data, false, new Date);
+      function addToplevelElement(memberName, realLocalName) {
+        var element;
+        if(!realLocalName) {
+          realLocalName = memberName
+        }
+        element = document.createElementNS(officens, realLocalName);
+        root[memberName] = element;
+        root.appendChild(element)
+      }
+      addToplevelElement("meta");
+      addToplevelElement("settings");
+      addToplevelElement("scripts");
+      addToplevelElement("fontFaceDecls", "font-face-decls");
+      addToplevelElement("styles");
+      addToplevelElement("automaticStyles", "automatic-styles");
+      addToplevelElement("masterStyles", "master-styles");
+      addToplevelElement("body");
+      root.body.appendChild(text);
+      setState(OdfContainer.DONE);
+      return emptyzip
+    }
+    function fillZip() {
+      var data, date = new Date;
       data = runtime.byteArrayFromString(serializeSettingsXml(), "utf8");
-      zip.save("settings.xml", data, true, new Date);
+      zip.save("settings.xml", data, true, date);
       data = runtime.byteArrayFromString(serializeMetaXml(), "utf8");
-      zip.save("meta.xml", data, true, new Date);
+      zip.save("meta.xml", data, true, date);
       data = runtime.byteArrayFromString(serializeStylesXml(), "utf8");
-      zip.save("styles.xml", data, true, new Date);
+      zip.save("styles.xml", data, true, date);
       data = runtime.byteArrayFromString(serializeContentXml(), "utf8");
-      zip.save("content.xml", data, true, new Date);
-      zip.write(function(err) {
+      zip.save("content.xml", data, true, date);
+      data = runtime.byteArrayFromString(serializeManifestXml(), "utf8");
+      zip.save("META-INF/manifest.xml", data, true, date)
+    }
+    function createByteArray(successCallback, errorCallback) {
+      fillZip();
+      zip.createByteArray(successCallback, errorCallback)
+    }
+    this.createByteArray = createByteArray;
+    function saveAs(newurl, callback) {
+      fillZip();
+      zip.writeAs(newurl, function(err) {
         callback(err)
       })
+    }
+    this.saveAs = saveAs;
+    this.save = function(callback) {
+      saveAs(url, callback)
+    };
+    this.getUrl = function() {
+      return url
     };
     this.state = OdfContainer.LOADING;
     this.rootElement = createElement(ODFDocumentElement);
-    this.parts = new OdfPartList(this);
-    zip = new core.Zip(url, function(err, zipobject) {
-      zip = zipobject;
-      if(err) {
-        loadFromXML(url, function(xmlerr) {
-          if(err) {
-            zip.error = err + "\n" + xmlerr;
-            setState(OdfContainer.INVALID)
-          }
-        })
-      }else {
-        loadComponents()
-      }
-    })
+    if(url) {
+      zip = new core.Zip(url, function(err, zipobject) {
+        zip = zipobject;
+        if(err) {
+          loadFromXML(url, function(xmlerr) {
+            if(err) {
+              zip.error = err + "\n" + xmlerr;
+              setState(OdfContainer.INVALID)
+            }
+          })
+        }else {
+          loadComponents()
+        }
+      })
+    }else {
+      zip = createEmptyTextDocument()
+    }
   };
   odf.OdfContainer.EMPTY = 0;
   odf.OdfContainer.LOADING = 1;
@@ -6009,73 +7932,447 @@ odf.OdfContainer = function() {
   };
   return odf.OdfContainer
 }();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.Base64");
+runtime.loadClass("xmldom.XPath");
+runtime.loadClass("odf.OdfContainer");
+odf.FontLoader = function() {
+  var xpath = new xmldom.XPath, base64 = new core.Base64;
+  function getEmbeddedFontDeclarations(fontFaceDecls) {
+    var decls = {}, fonts, i, font, name, uris, href, family;
+    if(!fontFaceDecls) {
+      return decls
+    }
+    fonts = xpath.getODFElementsWithXPath(fontFaceDecls, "style:font-face[svg:font-face-src]", odf.Namespaces.resolvePrefix);
+    for(i = 0;i < fonts.length;i += 1) {
+      font = fonts[i];
+      name = font.getAttributeNS(odf.Namespaces.stylens, "name");
+      family = font.getAttributeNS(odf.Namespaces.svgns, "font-family");
+      uris = xpath.getODFElementsWithXPath(font, "svg:font-face-src/svg:font-face-uri", odf.Namespaces.resolvePrefix);
+      if(uris.length > 0) {
+        href = uris[0].getAttributeNS(odf.Namespaces.xlinkns, "href");
+        decls[name] = {href:href, family:family}
+      }
+    }
+    return decls
+  }
+  function addFontToCSS(name, font, fontdata, stylesheet) {
+    var cssFamily = font.family || name, rule = "@font-face { font-family: '" + cssFamily + "'; src: " + "url(data:application/x-font-ttf;charset=binary;base64," + base64.convertUTF8ArrayToBase64(fontdata) + ') format("truetype"); }';
+    try {
+      stylesheet.insertRule(rule, stylesheet.cssRules.length)
+    }catch(e) {
+      runtime.log("Problem inserting rule in CSS: " + runtime.toJson(e) + "\nRule: " + rule)
+    }
+  }
+  function loadFontIntoCSS(embeddedFontDeclarations, odfContainer, pos, stylesheet, callback) {
+    var name, i = 0, n;
+    for(n in embeddedFontDeclarations) {
+      if(embeddedFontDeclarations.hasOwnProperty(n)) {
+        if(i === pos) {
+          name = n;
+          break
+        }
+        i += 1
+      }
+    }
+    if(!name) {
+      if(callback) {
+        callback()
+      }
+      return
+    }
+    odfContainer.getPartData(embeddedFontDeclarations[name].href, function(err, fontdata) {
+      if(err) {
+        runtime.log(err)
+      }else {
+        addFontToCSS(name, embeddedFontDeclarations[name], fontdata, stylesheet)
+      }
+      loadFontIntoCSS(embeddedFontDeclarations, odfContainer, pos + 1, stylesheet, callback)
+    })
+  }
+  function loadFontsIntoCSS(embeddedFontDeclarations, odfContainer, stylesheet) {
+    loadFontIntoCSS(embeddedFontDeclarations, odfContainer, 0, stylesheet)
+  }
+  odf.FontLoader = function FontLoader() {
+    this.loadFonts = function(odfContainer, stylesheet) {
+      var embeddedFontDeclarations, fontFaceDecls = odfContainer.rootElement.fontFaceDecls;
+      while(stylesheet.cssRules.length) {
+        stylesheet.deleteRule(stylesheet.cssRules.length - 1)
+      }
+      if(fontFaceDecls) {
+        embeddedFontDeclarations = getEmbeddedFontDeclarations(fontFaceDecls);
+        loadFontsIntoCSS(embeddedFontDeclarations, odfContainer, stylesheet)
+      }
+    }
+  };
+  return odf.FontLoader
+}();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.Utils");
+runtime.loadClass("odf.Namespaces");
+runtime.loadClass("odf.OdfContainer");
+runtime.loadClass("odf.StyleInfo");
+runtime.loadClass("odf.OdfUtils");
+runtime.loadClass("odf.TextStyleApplicator");
 odf.Formatting = function Formatting() {
-  var odfContainer, styleInfo = new odf.StyleInfo;
-  function RangeElementIterator(range) {
-    function getNthChild(parent, n) {
-      var c = parent && parent.firstChild;
-      while(c && n) {
-        c = c.nextSibling;
-        n -= 1
+  var self = this, odfContainer, styleInfo = new odf.StyleInfo, svgns = odf.Namespaces.svgns, stylens = odf.Namespaces.stylens, textns = odf.Namespaces.textns, numberns = odf.Namespaces.numberns, odfUtils = new odf.OdfUtils, utils = new core.Utils;
+  function mergeRecursive(destination, source) {
+    Object.keys(source).forEach(function(p) {
+      try {
+        if(source[p].constructor === Object) {
+          destination[p] = mergeRecursive(destination[p], source[p])
+        }else {
+          destination[p] = source[p]
+        }
+      }catch(e) {
+        destination[p] = source[p]
       }
-      return c
-    }
-    var start = getNthChild(range.startContainer, range.startOffset), end = getNthChild(range.endContainer, range.endOffset), current = start;
-    this.next = function() {
-      var c = current;
-      if(c === null) {
-        return c
-      }
-      return null
-    }
-  }
-  function getParentStyle(element) {
-    var n = element.firstChild, e;
-    if(n.nodeType === 1) {
-      e = n;
-      return e
-    }
-    return null
-  }
-  function getParagraphStyles(range) {
-    var iter = new RangeElementIterator(range), e, styles = [];
-    e = iter.next();
-    while(e) {
-      if(styleInfo.canElementHaveStyle("paragraph", e)) {
-        styles.push(e)
-      }
-    }
-    return styles
+    });
+    return destination
   }
   this.setOdfContainer = function(odfcontainer) {
     odfContainer = odfcontainer
   };
-  this.isCompletelyBold = function(selection) {
-    return false
-  };
-  this.getAlignment = function(selection) {
-    var styles = this.getParagraphStyles(selection), i, l = styles.length;
-    return undefined
-  };
-  this.getParagraphStyles = function(selection) {
-    var i, j, s, styles = [];
-    for(i = 0;i < selection.length;i += 0) {
-      s = getParagraphStyles(selection[i]);
-      for(j = 0;j < s.length;j += 1) {
-        if(styles.indexOf(s[j]) === -1) {
-          styles.push(s[j])
+  this.getFontMap = function() {
+    var fontFaceDecls = odfContainer.rootElement.fontFaceDecls, fontFaceDeclsMap = {}, node, name, family;
+    node = fontFaceDecls && fontFaceDecls.firstChild;
+    while(node) {
+      if(node.nodeType === Node.ELEMENT_NODE) {
+        name = node.getAttributeNS(stylens, "name");
+        if(name) {
+          family = node.getAttributeNS(svgns, "font-family");
+          if(family || node.getElementsByTagNameNS(svgns, "font-face-uri")[0]) {
+            fontFaceDeclsMap[name] = family
+          }
         }
       }
+      node = node.nextSibling
     }
+    return fontFaceDeclsMap
+  };
+  this.getAvailableParagraphStyles = function() {
+    var node = odfContainer.rootElement.styles && odfContainer.rootElement.styles.firstChild, p_family, p_name, p_displayName, paragraphStyles = [], style;
+    while(node) {
+      if(node.nodeType === Node.ELEMENT_NODE && node.localName === "style" && node.namespaceURI === stylens) {
+        style = node;
+        p_family = style.getAttributeNS(stylens, "family");
+        if(p_family === "paragraph") {
+          p_name = style.getAttributeNS(stylens, "name");
+          p_displayName = style.getAttributeNS(stylens, "display-name") || p_name;
+          if(p_name && p_displayName) {
+            paragraphStyles.push({name:p_name, displayName:p_displayName})
+          }
+        }
+      }
+      node = node.nextSibling
+    }
+    return paragraphStyles
+  };
+  this.isStyleUsed = function(styleElement) {
+    var hasDerivedStyles, isUsed;
+    hasDerivedStyles = styleInfo.hasDerivedStyles(odfContainer.rootElement, odf.Namespaces.resolvePrefix, styleElement);
+    isUsed = (new styleInfo.UsedStyleList(odfContainer.rootElement.styles)).uses(styleElement) || (new styleInfo.UsedStyleList(odfContainer.rootElement.automaticStyles)).uses(styleElement) || (new styleInfo.UsedStyleList(odfContainer.rootElement.body)).uses(styleElement);
+    return hasDerivedStyles || isUsed
+  };
+  function getDefaultStyleElement(family) {
+    var node = odfContainer.rootElement.styles.firstChild;
+    while(node) {
+      if(node.nodeType === Node.ELEMENT_NODE && node.namespaceURI === stylens && node.localName === "default-style" && node.getAttributeNS(stylens, "family") === family) {
+        return node
+      }
+      node = node.nextSibling
+    }
+    return null
+  }
+  function getStyleElement(styleName, family, styleElements) {
+    var node, nodeStyleName, styleListElement;
+    styleElements = styleElements || [odfContainer.rootElement.automaticStyles, odfContainer.rootElement.styles];
+    styleListElement = styleElements.shift();
+    while(styleListElement) {
+      node = styleListElement.firstChild;
+      while(node) {
+        if(node.nodeType === Node.ELEMENT_NODE) {
+          nodeStyleName = node.getAttributeNS(stylens, "name");
+          if(node.namespaceURI === stylens && node.localName === "style" && node.getAttributeNS(stylens, "family") === family && nodeStyleName === styleName) {
+            return node
+          }
+          if(family === "list-style" && node.namespaceURI === textns && node.localName === "list-style" && nodeStyleName === styleName) {
+            return node
+          }
+          if(family === "data" && node.namespaceURI === numberns && nodeStyleName === styleName) {
+            return node
+          }
+        }
+        node = node.nextSibling
+      }
+      styleListElement = styleElements.shift()
+    }
+    return null
+  }
+  this.getStyleElement = getStyleElement;
+  function getStyleAttributes(styleNode) {
+    var i, propertiesMap = {}, propertiesNode = styleNode.firstChild;
+    while(propertiesNode) {
+      if(propertiesNode.nodeType === Node.ELEMENT_NODE && propertiesNode.namespaceURI === stylens) {
+        propertiesMap[propertiesNode.nodeName] = {};
+        for(i = 0;i < propertiesNode.attributes.length;i += 1) {
+          propertiesMap[propertiesNode.nodeName][propertiesNode.attributes[i].name] = propertiesNode.attributes[i].value
+        }
+      }
+      propertiesNode = propertiesNode.nextSibling
+    }
+    return propertiesMap
+  }
+  this.getStyleAttributes = getStyleAttributes;
+  function mapObjOntoNode(node, properties) {
+    Object.keys(properties).forEach(function(key) {
+      var parts = key.split(":"), prefix = parts[0], localName = parts[1], ns = odf.Namespaces.resolvePrefix(prefix), value = properties[key], element;
+      if(typeof value === "object" && Object.keys(value).length) {
+        element = node.getElementsByTagNameNS(ns, localName)[0] || node.ownerDocument.createElementNS(ns, key);
+        node.appendChild(element);
+        mapObjOntoNode(element, value)
+      }else {
+        node.setAttributeNS(ns, key, value)
+      }
+    })
+  }
+  function getInheritedStyleAttributes(styleNode) {
+    var styleListElement = odfContainer.rootElement.styles, parentStyleName, propertiesMap = {}, inheritedPropertiesMap = {}, node = styleNode;
+    while(node) {
+      propertiesMap = getStyleAttributes(node);
+      inheritedPropertiesMap = mergeRecursive(propertiesMap, inheritedPropertiesMap);
+      parentStyleName = node.getAttributeNS(stylens, "parent-style-name");
+      if(parentStyleName) {
+        node = getStyleElement(parentStyleName, styleNode.getAttributeNS(stylens, "family"), [styleListElement])
+      }else {
+        node = null
+      }
+    }
+    node = getDefaultStyleElement(styleNode.getAttributeNS(stylens, "family"));
+    if(node) {
+      propertiesMap = getStyleAttributes(node);
+      inheritedPropertiesMap = mergeRecursive(propertiesMap, inheritedPropertiesMap)
+    }
+    return inheritedPropertiesMap
+  }
+  this.getInheritedStyleAttributes = getInheritedStyleAttributes;
+  this.getFirstNamedParentStyleNameOrSelf = function(styleName) {
+    var automaticStyleElementList = odfContainer.rootElement.automaticStyles, styleElementList = odfContainer.rootElement.styles, styleElement;
+    styleElement = getStyleElement(styleName, "paragraph", [automaticStyleElementList]);
+    while(styleElement) {
+      styleName = styleElement.getAttributeNS(stylens, "parent-style-name");
+      styleElement = getStyleElement(styleName, "paragraph", [automaticStyleElementList])
+    }
+    styleElement = getStyleElement(styleName, "paragraph", [styleElementList]);
+    if(!styleElement) {
+      return null
+    }
+    return styleName
+  };
+  this.hasParagraphStyle = function(styleName) {
+    return Boolean(getStyleElement(styleName, "paragraph"))
+  };
+  function buildStyleChain(node, collectedChains) {
+    var parent = node.nodeType === Node.TEXT_NODE ? node.parentNode : node, nodeStyles, appliedStyles = [], chainKey = "", foundContainer = false;
+    while(parent) {
+      if(!foundContainer && odfUtils.isGroupingElement(parent)) {
+        foundContainer = true
+      }
+      nodeStyles = styleInfo.determineStylesForNode((parent));
+      if(nodeStyles) {
+        appliedStyles.push(nodeStyles)
+      }
+      parent = parent.parentNode
+    }
+    if(foundContainer) {
+      appliedStyles.forEach(function(usedStyleMap) {
+        Object.keys(usedStyleMap).forEach(function(styleFamily) {
+          Object.keys(usedStyleMap[styleFamily]).forEach(function(styleName) {
+            chainKey += "|" + styleFamily + ":" + styleName + "|"
+          })
+        })
+      });
+      if(collectedChains) {
+        collectedChains[chainKey] = appliedStyles
+      }
+    }
+    return foundContainer ? appliedStyles : undefined
+  }
+  function calculateAppliedStyle(styleChain) {
+    var mergedChildStyle = {orderedStyles:[]};
+    styleChain.forEach(function(elementStyleSet) {
+      Object.keys((elementStyleSet)).forEach(function(styleFamily) {
+        var styleName = Object.keys(elementStyleSet[styleFamily])[0], styleElement, parentStyle, displayName;
+        styleElement = getStyleElement(styleName, styleFamily);
+        if(styleElement) {
+          parentStyle = getInheritedStyleAttributes((styleElement));
+          mergedChildStyle = mergeRecursive(parentStyle, mergedChildStyle);
+          displayName = styleElement.getAttributeNS(stylens, "display-name")
+        }else {
+          runtime.log("No style element found for '" + styleName + "' of family '" + styleFamily + "'")
+        }
+        mergedChildStyle.orderedStyles.push({name:styleName, family:styleFamily, displayName:displayName})
+      })
+    });
+    return mergedChildStyle
+  }
+  this.getAppliedStyles = function(textNodes) {
+    var styleChains = {}, styles = [];
+    textNodes.forEach(function(n) {
+      buildStyleChain(n, styleChains)
+    });
+    Object.keys(styleChains).forEach(function(key) {
+      styles.push(calculateAppliedStyle(styleChains[key]))
+    });
     return styles
   };
-  this.getTextStyles = function(selection) {
-    return[]
+  this.getAppliedStylesForElement = function(node) {
+    var styleChain;
+    styleChain = buildStyleChain(node);
+    return styleChain ? calculateAppliedStyle(styleChain) : undefined
+  };
+  this.applyStyle = function(memberId, textNodes, limits, info) {
+    var textStyles = new odf.TextStyleApplicator("auto" + utils.hashString(memberId) + "_", self, odfContainer.rootElement.automaticStyles);
+    textStyles.applyStyle(textNodes, limits, info)
+  };
+  function getAllStyleNames() {
+    var styleElements = [odfContainer.rootElement.automaticStyles, odfContainer.rootElement.styles], node, styleNames = [];
+    styleElements.forEach(function(styleListElement) {
+      node = styleListElement.firstChild;
+      while(node) {
+        if(node.nodeType === Node.ELEMENT_NODE) {
+          if(node.namespaceURI === stylens && node.localName === "style" || node.namespaceURI === textns && node.localName === "list-style") {
+            styleNames.push(node.getAttributeNS(stylens, "name"))
+          }
+        }
+        node = node.nextSibling
+      }
+    });
+    return styleNames
+  }
+  this.updateStyle = function(styleNode, properties, newStylePrefix) {
+    var name, existingNames, startIndex;
+    mapObjOntoNode(styleNode, properties);
+    if(newStylePrefix) {
+      name = styleNode.getAttributeNS(stylens, "name");
+      existingNames = getAllStyleNames();
+      startIndex = 0;
+      do {
+        name = newStylePrefix + startIndex;
+        startIndex += 1
+      }while(existingNames.indexOf(name) !== -1);
+      styleNode.setAttributeNS(stylens, "style:name", name)
+    }
   }
 };
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.DomUtils");
 runtime.loadClass("odf.OdfContainer");
 runtime.loadClass("odf.Formatting");
 runtime.loadClass("xmldom.XPath");
+runtime.loadClass("odf.FontLoader");
+runtime.loadClass("odf.Style2CSS");
+runtime.loadClass("odf.OdfUtils");
+runtime.loadClass("gui.AnnotationViewManager");
 odf.OdfCanvas = function() {
   function LoadingQueue() {
     var queue = [], taskRunning = false;
@@ -6109,9 +8406,15 @@ odf.OdfCanvas = function() {
       while(sheet.cssRules.length > 0) {
         sheet.deleteRule(0)
       }
-      sheet.insertRule("office|presentation draw|page {display:none;}", 0);
-      sheet.insertRule("office|presentation draw|page:nth-child(" + position + ") {display:block;}", 1)
+      sheet.insertRule("#shadowContent draw|page {display:none;}", 0);
+      sheet.insertRule("office|presentation draw|page {display:none;}", 1);
+      sheet.insertRule("#shadowContent draw|page:nth-of-type(" + position + ") {display:block;}", 2);
+      sheet.insertRule("office|presentation draw|page:nth-of-type(" + position + ") {display:block;}", 3)
     }
+    this.showFirstPage = function() {
+      position = 1;
+      updateCSS()
+    };
     this.showNextPage = function() {
       position += 1;
       updateCSS()
@@ -6119,6 +8422,12 @@ odf.OdfCanvas = function() {
     this.showPreviousPage = function() {
       if(position > 1) {
         position -= 1;
+        updateCSS()
+      }
+    };
+    this.showPage = function(n) {
+      if(n > 0) {
+        position = n;
         updateCSS()
       }
     };
@@ -6137,7 +8446,7 @@ odf.OdfCanvas = function() {
     }
   }
   function SelectionWatcher(element) {
-    var selection = [], count = 0, listeners = [];
+    var selection = [], listeners = [];
     function isAncestorOf(ancestor, descendant) {
       while(descendant) {
         if(descendant === ancestor) {
@@ -6151,9 +8460,9 @@ odf.OdfCanvas = function() {
       return isAncestorOf(element, range.startContainer) && isAncestorOf(element, range.endContainer)
     }
     function getCurrentSelection() {
-      var s = [], selection = runtime.getWindow().getSelection(), i, r;
-      for(i = 0;i < selection.rangeCount;i += 1) {
-        r = selection.getRangeAt(i);
+      var s = [], current = runtime.getWindow().getSelection(), i, r;
+      for(i = 0;i < current.rangeCount;i += 1) {
+        r = current.getRangeAt(i);
         if(r !== null && fallsWithin(element, r)) {
           s.push(r)
         }
@@ -6215,37 +8524,64 @@ odf.OdfCanvas = function() {
     listenEvent(element, "keyup", checkSelection);
     listenEvent(element, "keydown", checkSelection)
   }
-  var style2CSS = new odf.Style2CSS, namespaces = style2CSS.namespaces, drawns = namespaces.draw, fons = namespaces.fo, officens = namespaces.office, svgns = namespaces.svg, textns = namespaces.text, xlinkns = namespaces.xlink, window = runtime.getWindow(), xpath = new xmldom.XPath, eventHandlers = {}, editparagraph, loadingQueue = new LoadingQueue;
-  function addEventListener(eventType, eventHandler) {
-    var handlers = eventHandlers[eventType];
-    if(handlers === undefined) {
-      handlers = eventHandlers[eventType] = []
-    }
-    if(eventHandler && handlers.indexOf(eventHandler) === -1) {
-      handlers.push(eventHandler)
-    }
-  }
-  function fireEvent(eventType, args) {
-    if(!eventHandlers.hasOwnProperty(eventType)) {
-      return
-    }
-    var handlers = eventHandlers[eventType], i;
-    for(i = 0;i < handlers.length;i += 1) {
-      handlers[i](args)
-    }
-  }
+  var drawns = odf.Namespaces.drawns, fons = odf.Namespaces.fons, officens = odf.Namespaces.officens, stylens = odf.Namespaces.stylens, svgns = odf.Namespaces.svgns, tablens = odf.Namespaces.tablens, textns = odf.Namespaces.textns, xlinkns = odf.Namespaces.xlinkns, xmlns = odf.Namespaces.xmlns, presentationns = odf.Namespaces.presentationns, window = runtime.getWindow(), xpath = new xmldom.XPath, utils = new odf.OdfUtils, domUtils = new core.DomUtils, shadowContent, annotationsPane, allowAnnotations = 
+  false, annotationManager;
   function clear(element) {
     while(element.firstChild) {
       element.removeChild(element.firstChild)
     }
   }
-  function handleStyles(odfelement, stylesxmlcss) {
+  function handleStyles(odfcontainer, formatting, stylesxmlcss) {
     var style2css = new odf.Style2CSS;
-    style2css.style2css(stylesxmlcss.sheet, odfelement.styles, odfelement.automaticStyles)
+    style2css.style2css(odfcontainer.getDocumentType(), stylesxmlcss.sheet, formatting.getFontMap(), odfcontainer.rootElement.styles, odfcontainer.rootElement.automaticStyles)
   }
-  function setFramePosition(id, frame, stylesheet) {
+  function handleFonts(odfContainer, fontcss) {
+    var fontLoader = new odf.FontLoader;
+    fontLoader.loadFonts(odfContainer, fontcss.sheet)
+  }
+  function getMasterPage(odfContainer, masterPageName) {
+    if(!masterPageName) {
+      return null
+    }
+    var masterStyles = odfContainer.rootElement.masterStyles, masterPages = masterStyles.getElementsByTagNameNS(stylens, "master-page"), masterPage = null, i;
+    for(i = 0;i < masterPages.length;i += 1) {
+      if(masterPages[i].getAttributeNS(stylens, "name") === masterPageName) {
+        masterPage = masterPages[i];
+        break
+      }
+    }
+    return masterPage
+  }
+  function setFramePosition(odfContainer, id, frame, stylesheet) {
     frame.setAttribute("styleid", id);
-    var rule, anchor = frame.getAttributeNS(textns, "anchor-type"), x = frame.getAttributeNS(svgns, "x"), y = frame.getAttributeNS(svgns, "y"), width = frame.getAttributeNS(svgns, "width"), height = frame.getAttributeNS(svgns, "height"), minheight = frame.getAttributeNS(fons, "min-height"), minwidth = frame.getAttributeNS(fons, "min-width");
+    var rule, anchor = frame.getAttributeNS(textns, "anchor-type"), x = frame.getAttributeNS(svgns, "x"), y = frame.getAttributeNS(svgns, "y"), width = frame.getAttributeNS(svgns, "width"), height = frame.getAttributeNS(svgns, "height"), minheight = frame.getAttributeNS(fons, "min-height"), minwidth = frame.getAttributeNS(fons, "min-width"), masterPageName = frame.getAttributeNS(drawns, "master-page-name"), masterPage = null, j, clonedPage, clonedNode, pageNumber = 0, pageNumberContainer, node, document = 
+    odfContainer.rootElement.ownerDocument;
+    masterPage = getMasterPage(odfContainer, masterPageName);
+    if(masterPage) {
+      clonedPage = document.createElementNS(drawns, "draw:page");
+      node = masterPage.firstElementChild;
+      j = 0;
+      while(node) {
+        if(node.getAttributeNS(presentationns, "placeholder") !== "true") {
+          clonedNode = node.cloneNode(true);
+          clonedPage.appendChild(clonedNode);
+          setFramePosition(odfContainer, id + "_" + j, (clonedNode), stylesheet)
+        }
+        node = node.nextElementSibling;
+        j += 1
+      }
+      shadowContent.appendChild(clonedPage);
+      pageNumber = shadowContent.getElementsByTagNameNS(drawns, "page").length;
+      pageNumberContainer = clonedPage.getElementsByTagNameNS(textns, "page-number")[0];
+      if(pageNumberContainer) {
+        while(pageNumberContainer.firstChild) {
+          pageNumberContainer.removeChild(pageNumberContainer.firstChild)
+        }
+        pageNumberContainer.appendChild(document.createTextNode(pageNumber))
+      }
+      setFramePosition(odfContainer, id, clonedPage, stylesheet);
+      clonedPage.setAttributeNS(drawns, "draw:master-page-name", masterPage.getAttributeNS(stylens, "name"))
+    }
     if(anchor === "as-char") {
       rule = "display: inline-block;"
     }else {
@@ -6284,7 +8620,7 @@ odf.OdfCanvas = function() {
     var node = image.firstChild;
     while(node) {
       if(node.namespaceURI === officens && node.localName === "binary-data") {
-        return"data:image/png;base64," + node.textContent
+        return"data:image/png;base64," + node.textContent.replace(/[\r\n\s]/g, "")
       }
       node = node.nextSibling
     }
@@ -6292,24 +8628,22 @@ odf.OdfCanvas = function() {
   }
   function setImage(id, container, image, stylesheet) {
     image.setAttribute("styleid", id);
-    var url = image.getAttributeNS(xlinkns, "href"), part, node;
+    var url = image.getAttributeNS(xlinkns, "href"), part;
     function callback(url) {
-      var rule = "background-image: url(" + url + ");";
-      rule = 'draw|image[styleid="' + id + '"] {' + rule + "}";
-      stylesheet.insertRule(rule, stylesheet.cssRules.length)
+      var rule;
+      if(url) {
+        rule = "background-image: url(" + url + ");";
+        rule = 'draw|image[styleid="' + id + '"] {' + rule + "}";
+        stylesheet.insertRule(rule, stylesheet.cssRules.length)
+      }
     }
     if(url) {
       try {
-        if(container.getPartUrl) {
-          url = container.getPartUrl(url);
-          callback(url)
-        }else {
-          part = container.getPart(url);
-          part.onchange = function(part) {
-            callback(part.url)
-          };
-          part.load()
-        }
+        part = container.getPart(url);
+        part.onchange = function(part) {
+          callback(part.url)
+        };
+        part.load()
       }catch(e) {
         runtime.log("slight problem: " + e)
       }
@@ -6319,7 +8653,7 @@ odf.OdfCanvas = function() {
     }
   }
   function formatParagraphAnchors(odfbody) {
-    var runtimens = "urn:webodf", n, i, nodes = xpath.getODFElementsWithXPath(odfbody, ".//*[*[@text:anchor-type='paragraph']]", style2CSS.namespaceResolver);
+    var runtimens = "urn:webodf", n, i, nodes = xpath.getODFElementsWithXPath(odfbody, ".//*[*[@text:anchor-type='paragraph']]", odf.Namespaces.resolvePrefix);
     for(i = 0;i < nodes.length;i += 1) {
       n = nodes[i];
       if(n.setAttributeNS) {
@@ -6327,11 +8661,94 @@ odf.OdfCanvas = function() {
       }
     }
   }
-  function modifyImages(container, odfbody, stylesheet) {
-    var node, frames, i, images;
-    function namespaceResolver(prefix) {
-      return namespaces[prefix]
+  function modifyTables(odffragment) {
+    var i, tableCells, node;
+    function modifyTableCell(node) {
+      if(node.hasAttributeNS(tablens, "number-columns-spanned")) {
+        node.setAttribute("colspan", node.getAttributeNS(tablens, "number-columns-spanned"))
+      }
+      if(node.hasAttributeNS(tablens, "number-rows-spanned")) {
+        node.setAttribute("rowspan", node.getAttributeNS(tablens, "number-rows-spanned"))
+      }
     }
+    tableCells = odffragment.getElementsByTagNameNS(tablens, "table-cell");
+    for(i = 0;i < tableCells.length;i += 1) {
+      node = (tableCells.item(i));
+      modifyTableCell(node)
+    }
+  }
+  function modifyAnnotations(odffragment) {
+    var annotationNodes = domUtils.getElementsByTagNameNS(odffragment, officens, "annotation"), annotationEnds = domUtils.getElementsByTagNameNS(odffragment, officens, "annotation-end"), currentAnnotationName, i;
+    function matchAnnotationEnd(element) {
+      return currentAnnotationName === element.getAttributeNS(officens, "name")
+    }
+    for(i = 0;i < annotationNodes.length;i += 1) {
+      currentAnnotationName = annotationNodes[i].getAttributeNS(officens, "name");
+      annotationManager.addAnnotation({node:annotationNodes[i], end:annotationEnds.filter(matchAnnotationEnd)[0] || null})
+    }
+    annotationManager.rerenderAnnotations()
+  }
+  function modifyLinks(odffragment) {
+    var i, links, node;
+    function modifyLink(node) {
+      var url, clickHandler;
+      if(!node.hasAttributeNS(xlinkns, "href")) {
+        return
+      }
+      url = node.getAttributeNS(xlinkns, "href");
+      if(url[0] === "#") {
+        url = url.substring(1);
+        clickHandler = function() {
+          var bookmarks = xpath.getODFElementsWithXPath(odffragment, "//text:bookmark-start[@text:name='" + url + "']", odf.Namespaces.resolvePrefix);
+          if(bookmarks.length === 0) {
+            bookmarks = xpath.getODFElementsWithXPath(odffragment, "//text:bookmark[@text:name='" + url + "']", odf.Namespaces.resolvePrefix)
+          }
+          if(bookmarks.length > 0) {
+            bookmarks[0].scrollIntoView(true)
+          }
+          return false
+        }
+      }else {
+        clickHandler = function() {
+          window.open(url)
+        }
+      }
+      node.onclick = clickHandler
+    }
+    links = odffragment.getElementsByTagNameNS(textns, "a");
+    for(i = 0;i < links.length;i += 1) {
+      node = (links.item(i));
+      modifyLink(node)
+    }
+  }
+  function expandSpaceElements(odffragment) {
+    var spaces, doc = odffragment.ownerDocument;
+    function expandSpaceElement(space) {
+      var j, count;
+      while(space.firstChild) {
+        space.removeChild(space.firstChild)
+      }
+      space.appendChild(doc.createTextNode(" "));
+      count = parseInt(space.getAttributeNS(textns, "c"), 10);
+      if(count > 1) {
+        space.removeAttributeNS(textns, "c");
+        for(j = 1;j < count;j += 1) {
+          space.parentNode.insertBefore(space.cloneNode(true), space)
+        }
+      }
+    }
+    spaces = domUtils.getElementsByTagNameNS(odffragment, textns, "s");
+    spaces.forEach(expandSpaceElement)
+  }
+  function expandTabElements(odffragment) {
+    var tabs;
+    tabs = domUtils.getElementsByTagNameNS(odffragment, textns, "tab");
+    tabs.forEach(function(tab) {
+      tab.textContent = "\t"
+    })
+  }
+  function modifyImages(container, odfbody, stylesheet) {
+    var node, frames, i;
     frames = [];
     node = odfbody.firstChild;
     while(node && node !== odfbody) {
@@ -6351,31 +8768,19 @@ odf.OdfCanvas = function() {
     }
     for(i = 0;i < frames.length;i += 1) {
       node = frames[i];
-      setFramePosition("frame" + String(i), node, stylesheet)
+      setFramePosition(container, "frame" + String(i), node, stylesheet)
     }
     formatParagraphAnchors(odfbody)
   }
-  function loadImages(container, odffragment, stylesheet) {
-    var i, images, node;
-    function loadImage(name, container, node, stylesheet) {
-      loadingQueue.addToQueue(function() {
-        setImage(name, container, node, stylesheet)
-      })
-    }
-    images = odffragment.getElementsByTagNameNS(drawns, "image");
-    for(i = 0;i < images.length;i += 1) {
-      node = images.item(i);
-      loadImage("image" + String(i), container, node, stylesheet)
-    }
-  }
-  function setVideo(id, container, plugin, stylesheet) {
-    var video, source, url, videoType, doc = plugin.ownerDocument, part, node;
+  function setVideo(container, plugin) {
+    var video, source, url, doc = plugin.ownerDocument, part;
     url = plugin.getAttributeNS(xlinkns, "href");
     function callback(url, mimetype) {
+      var ns = doc.documentElement.namespaceURI;
       if(mimetype.substr(0, 6) === "video/") {
-        video = doc.createElementNS(doc.documentElement.namespaceURI, "video");
+        video = doc.createElementNS(ns, "video");
         video.setAttribute("controls", "controls");
-        source = doc.createElement("source");
+        source = doc.createElementNS(ns, "source");
         source.setAttribute("src", url);
         source.setAttribute("type", mimetype);
         video.appendChild(source);
@@ -6386,16 +8791,11 @@ odf.OdfCanvas = function() {
     }
     if(url) {
       try {
-        if(container.getPartUrl) {
-          url = container.getPartUrl(url);
-          callback(url, "video/mp4")
-        }else {
-          part = container.getPart(url);
-          part.onchange = function(part) {
-            callback(part.url, part.mimetype)
-          };
-          part.load()
-        }
+        part = container.getPart(url);
+        part.onchange = function(part) {
+          callback(part.url, part.mimetype)
+        };
+        part.load()
       }catch(e) {
         runtime.log("slight problem: " + e)
       }
@@ -6405,98 +8805,314 @@ odf.OdfCanvas = function() {
       callback(url, "video/mp4")
     }
   }
-  function loadVideos(container, odffragment, stylesheet) {
-    var i, plugins, node;
-    function loadVideo(name, container, node, stylesheet) {
-      loadingQueue.addToQueue(function() {
-        setVideo(name, container, node, stylesheet)
-      })
-    }
-    plugins = odffragment.getElementsByTagNameNS(drawns, "plugin");
-    runtime.log("Loading Videos:");
-    for(i = 0;i < plugins.length;i += 1) {
-      runtime.log("...Found a video.");
-      node = plugins.item(i);
-      loadVideo("video" + String(i), container, node, stylesheet)
-    }
-  }
-  function addStyleSheet(document) {
-    var styles = document.getElementsByTagName("style"), head = document.getElementsByTagName("head")[0], text = "", prefix, a = "", b;
-    if(styles && styles.length > 0) {
-      styles = styles[0].cloneNode(false)
+  function getNumberRule(node) {
+    var style = node.getAttributeNS(stylens, "num-format"), suffix = node.getAttributeNS(stylens, "num-suffix"), prefix = node.getAttributeNS(stylens, "num-prefix"), rule = "", stylemap = {1:"decimal", "a":"lower-latin", "A":"upper-latin", "i":"lower-roman", "I":"upper-roman"}, content;
+    content = prefix || "";
+    if(stylemap.hasOwnProperty(style)) {
+      content += " counter(list, " + stylemap[style] + ")"
     }else {
-      styles = document.createElement("style")
-    }
-    for(prefix in namespaces) {
-      if(namespaces.hasOwnProperty(prefix) && prefix) {
-        text += "@namespace " + prefix + " url(" + namespaces[prefix] + ");\n"
+      if(style) {
+        content += "'" + style + "';"
+      }else {
+        content += " ''"
       }
     }
-    styles.appendChild(document.createTextNode(text));
-    head.appendChild(styles);
-    return styles
+    if(suffix) {
+      content += " '" + suffix + "'"
+    }
+    rule = "content: " + content + ";";
+    return rule
+  }
+  function getImageRule() {
+    var rule = "content: none;";
+    return rule
+  }
+  function getBulletRule(node) {
+    var bulletChar = node.getAttributeNS(textns, "bullet-char");
+    return"content: '" + bulletChar + "';"
+  }
+  function getBulletsRule(node) {
+    var itemrule;
+    if(node.localName === "list-level-style-number") {
+      itemrule = getNumberRule(node)
+    }else {
+      if(node.localName === "list-level-style-image") {
+        itemrule = getImageRule()
+      }else {
+        if(node.localName === "list-level-style-bullet") {
+          itemrule = getBulletRule(node)
+        }
+      }
+    }
+    return itemrule
+  }
+  function loadLists(odffragment, stylesheet) {
+    var i, lists, node, id, continueList, styleName, rule, listMap = {}, parentList, listStyles, listStyleMap = {}, bulletRule;
+    listStyles = window.document.getElementsByTagNameNS(textns, "list-style");
+    for(i = 0;i < listStyles.length;i += 1) {
+      node = (listStyles.item(i));
+      styleName = node.getAttributeNS(stylens, "name");
+      if(styleName) {
+        listStyleMap[styleName] = node
+      }
+    }
+    lists = odffragment.getElementsByTagNameNS(textns, "list");
+    for(i = 0;i < lists.length;i += 1) {
+      node = (lists.item(i));
+      id = node.getAttributeNS(xmlns, "id");
+      if(id) {
+        continueList = node.getAttributeNS(textns, "continue-list");
+        node.setAttribute("id", id);
+        rule = "text|list#" + id + " > text|list-item > *:first-child:before {";
+        styleName = node.getAttributeNS(textns, "style-name");
+        if(styleName) {
+          node = listStyleMap[styleName];
+          bulletRule = getBulletsRule(utils.getFirstNonWhitespaceChild(node))
+        }
+        if(continueList) {
+          parentList = listMap[continueList];
+          while(parentList) {
+            continueList = parentList;
+            parentList = listMap[continueList]
+          }
+          rule += "counter-increment:" + continueList + ";";
+          if(bulletRule) {
+            bulletRule = bulletRule.replace("list", continueList);
+            rule += bulletRule
+          }else {
+            rule += "content:counter(" + continueList + ");"
+          }
+        }else {
+          continueList = "";
+          if(bulletRule) {
+            bulletRule = bulletRule.replace("list", id);
+            rule += bulletRule
+          }else {
+            rule += "content: counter(" + id + ");"
+          }
+          rule += "counter-increment:" + id + ";";
+          stylesheet.insertRule("text|list#" + id + " {counter-reset:" + id + "}", stylesheet.cssRules.length)
+        }
+        rule += "}";
+        listMap[id] = continueList;
+        if(rule) {
+          stylesheet.insertRule(rule, stylesheet.cssRules.length)
+        }
+      }
+    }
+  }
+  function addWebODFStyleSheet(document) {
+    var head = document.getElementsByTagName("head")[0], style, href;
+    if(String(typeof webodf_css) !== "undefined") {
+      style = document.createElementNS(head.namespaceURI, "style");
+      style.setAttribute("media", "screen, print, handheld, projection");
+      style.appendChild(document.createTextNode(webodf_css))
+    }else {
+      style = document.createElementNS(head.namespaceURI, "link");
+      href = "webodf.css";
+      if(runtime.currentDirectory) {
+        href = runtime.currentDirectory() + "/../" + href
+      }
+      style.setAttribute("href", href);
+      style.setAttribute("rel", "stylesheet")
+    }
+    style.setAttribute("type", "text/css");
+    head.appendChild(style);
+    return style
+  }
+  function addStyleSheet(document) {
+    var head = document.getElementsByTagName("head")[0], style = document.createElementNS(head.namespaceURI, "style"), text = "";
+    style.setAttribute("type", "text/css");
+    style.setAttribute("media", "screen, print, handheld, projection");
+    odf.Namespaces.forEachPrefix(function(prefix, ns) {
+      text += "@namespace " + prefix + " url(" + ns + ");\n"
+    });
+    style.appendChild(document.createTextNode(text));
+    head.appendChild(style);
+    return style
   }
   odf.OdfCanvas = function OdfCanvas(element) {
-    var self = this, document = element.ownerDocument, odfcontainer, formatting = new odf.Formatting, selectionWatcher = new SelectionWatcher(element), slidecssindex = 0, pageSwitcher = new PageSwitcher(addStyleSheet(document)), stylesxmlcss = addStyleSheet(document), positioncss = addStyleSheet(document), editable = false, zoomLevel = 1;
+    runtime.assert(element !== null && element !== undefined, "odf.OdfCanvas constructor needs DOM element");
+    var self = this, doc = element.ownerDocument, odfcontainer, formatting = new odf.Formatting, selectionWatcher = new SelectionWatcher(element), pageSwitcher, fontcss, stylesxmlcss, positioncss, editable = false, zoomLevel = 1, eventHandlers = {}, editparagraph, loadingQueue = new LoadingQueue;
+    addWebODFStyleSheet(doc);
+    pageSwitcher = new PageSwitcher(addStyleSheet(doc));
+    fontcss = addStyleSheet(doc);
+    stylesxmlcss = addStyleSheet(doc);
+    positioncss = addStyleSheet(doc);
+    function loadImages(container, odffragment, stylesheet) {
+      var i, images, node;
+      function loadImage(name, container, node, stylesheet) {
+        loadingQueue.addToQueue(function() {
+          setImage(name, container, node, stylesheet)
+        })
+      }
+      images = odffragment.getElementsByTagNameNS(drawns, "image");
+      for(i = 0;i < images.length;i += 1) {
+        node = (images.item(i));
+        loadImage("image" + String(i), container, node, stylesheet)
+      }
+    }
+    function loadVideos(container, odffragment) {
+      var i, plugins, node;
+      function loadVideo(container, node) {
+        loadingQueue.addToQueue(function() {
+          setVideo(container, node)
+        })
+      }
+      plugins = odffragment.getElementsByTagNameNS(drawns, "plugin");
+      for(i = 0;i < plugins.length;i += 1) {
+        node = (plugins.item(i));
+        loadVideo(container, node)
+      }
+    }
+    function addEventListener(eventType, eventHandler) {
+      var handlers = eventHandlers[eventType];
+      if(handlers === undefined) {
+        handlers = eventHandlers[eventType] = []
+      }
+      if(eventHandler && handlers.indexOf(eventHandler) === -1) {
+        handlers.push(eventHandler)
+      }
+    }
+    function fireEvent(eventType, args) {
+      if(!eventHandlers.hasOwnProperty(eventType)) {
+        return
+      }
+      var handlers = eventHandlers[eventType], i;
+      for(i = 0;i < handlers.length;i += 1) {
+        handlers[i].apply(null, args)
+      }
+    }
     function fixContainerSize() {
       var sizer = element.firstChild, odfdoc = sizer.firstChild;
       if(!odfdoc) {
         return
       }
-      element.style.WebkitTransform = "scale(" + zoomLevel + ")";
-      element.style.WebkitTransformOrigin = "left top";
-      element.style.width = Math.round(zoomLevel * odfdoc.offsetWidth) + "px";
-      element.style.height = Math.round(zoomLevel * odfdoc.offsetHeight) + "px"
+      if(zoomLevel > 1) {
+        sizer.style.MozTransformOrigin = "center top";
+        sizer.style.WebkitTransformOrigin = "center top";
+        sizer.style.OTransformOrigin = "center top";
+        sizer.style.msTransformOrigin = "center top"
+      }else {
+        sizer.style.MozTransformOrigin = "left top";
+        sizer.style.WebkitTransformOrigin = "left top";
+        sizer.style.OTransformOrigin = "left top";
+        sizer.style.msTransformOrigin = "left top"
+      }
+      sizer.style.WebkitTransform = "scale(" + zoomLevel + ")";
+      sizer.style.MozTransform = "scale(" + zoomLevel + ")";
+      sizer.style.OTransform = "scale(" + zoomLevel + ")";
+      sizer.style.msTransform = "scale(" + zoomLevel + ")";
+      element.style.width = Math.round(zoomLevel * sizer.offsetWidth) + "px";
+      element.style.height = Math.round(zoomLevel * sizer.offsetHeight) + "px"
     }
     function handleContent(container, odfnode) {
       var css = positioncss.sheet, sizer;
-      modifyImages(container, odfnode.body, css);
-      css.insertRule("draw|page { background-color:#fff; }", css.cssRules.length);
       clear(element);
-      sizer = document.createElement("div");
+      sizer = doc.createElementNS(element.namespaceURI, "div");
       sizer.style.display = "inline-block";
       sizer.style.background = "white";
+      sizer.id = "sizer";
       sizer.appendChild(odfnode);
       element.appendChild(sizer);
+      annotationsPane = doc.createElementNS(element.namespaceURI, "div");
+      annotationsPane.id = "annotationsPane";
+      shadowContent = doc.createElementNS(element.namespaceURI, "div");
+      shadowContent.id = "shadowContent";
+      shadowContent.style.position = "absolute";
+      shadowContent.style.top = 0;
+      shadowContent.style.left = 0;
+      container.getContentElement().appendChild(shadowContent);
+      modifyImages(container, odfnode.body, css);
+      modifyTables(odfnode.body);
+      modifyLinks(odfnode.body);
+      expandSpaceElements(odfnode.body);
+      expandTabElements(odfnode.body);
       loadImages(container, odfnode.body, css);
-      loadVideos(container, odfnode.body, css);
+      loadVideos(container, odfnode.body);
+      loadLists(odfnode.body, css);
+      sizer.insertBefore(shadowContent, sizer.firstChild);
       fixContainerSize()
     }
-    function refreshOdf(container) {
-      if(odfcontainer !== container) {
-        return
+    function handleAnnotations(odfnode) {
+      var sizer = doc.getElementById("sizer");
+      if(allowAnnotations) {
+        if(!annotationsPane.parentNode) {
+          sizer.appendChild(annotationsPane);
+          sizer.style.paddingRight = window.getComputedStyle(annotationsPane).width;
+          fixContainerSize()
+        }
+        if(annotationManager) {
+          annotationManager.forgetAnnotations()
+        }
+        annotationManager = new gui.AnnotationViewManager(self, odfnode.body, annotationsPane);
+        modifyAnnotations(odfnode.body)
+      }else {
+        if(annotationsPane.parentNode) {
+          sizer.removeChild(annotationsPane);
+          sizer.style.paddingRight = 0;
+          annotationManager.forgetAnnotations();
+          fixContainerSize()
+        }
       }
+    }
+    function refreshOdf(suppressEvent) {
       function callback() {
         clear(element);
         element.style.display = "inline-block";
-        var odfnode = container.rootElement;
+        var odfnode = odfcontainer.rootElement;
         element.ownerDocument.importNode(odfnode, true);
-        formatting.setOdfContainer(container);
-        handleStyles(odfnode, stylesxmlcss);
-        handleContent(container, odfnode);
-        fireEvent("statereadychange")
+        formatting.setOdfContainer(odfcontainer);
+        handleFonts(odfcontainer, fontcss);
+        handleStyles(odfcontainer, formatting, stylesxmlcss);
+        handleContent(odfcontainer, odfnode);
+        handleAnnotations(odfnode);
+        if(!suppressEvent) {
+          fireEvent("statereadychange", [odfcontainer])
+        }
       }
       if(odfcontainer.state === odf.OdfContainer.DONE) {
         callback()
       }else {
-        odfcontainer.onchange = callback
+        runtime.log("WARNING: refreshOdf called but ODF was not DONE.");
+        runtime.setTimeout(function later_cb() {
+          if(odfcontainer.state === odf.OdfContainer.DONE) {
+            callback()
+          }else {
+            runtime.log("will be back later...");
+            runtime.setTimeout(later_cb, 500)
+          }
+        }, 100)
       }
     }
+    this.refreshCSS = function() {
+      handleStyles(odfcontainer, formatting, stylesxmlcss);
+      fixContainerSize()
+    };
+    this.refreshSize = function() {
+      fixContainerSize()
+    };
     this.odfContainer = function() {
       return odfcontainer
     };
     this.slidevisibilitycss = function() {
       return pageSwitcher.css
     };
-    this["load"] = this.load = function(url) {
+    this.setOdfContainer = function(container, suppressEvent) {
+      odfcontainer = container;
+      refreshOdf(suppressEvent === true)
+    };
+    function load(url) {
       loadingQueue.clearQueue();
       element.innerHTML = "loading " + url;
+      element.removeAttribute("style");
       odfcontainer = new odf.OdfContainer(url, function(container) {
         odfcontainer = container;
-        refreshOdf(container)
-      });
-      odfcontainer.onstatereadychange = refreshOdf
-    };
+        refreshOdf(false)
+      })
+    }
+    this["load"] = load;
+    this.load = load;
     function stopEditing() {
       if(!editparagraph) {
         return
@@ -6511,13 +9127,6 @@ odf.OdfCanvas = function() {
       stopEditing();
       odfcontainer.save(callback)
     };
-    function cancelPropagation(event) {
-      if(event.stopPropagation) {
-        event.stopPropagation()
-      }else {
-        event.cancelBubble = true
-      }
-    }
     function cancelEvent(event) {
       if(event.preventDefault) {
         event.preventDefault();
@@ -6527,15 +9136,9 @@ odf.OdfCanvas = function() {
         event.cancelBubble = true
       }
     }
-    this.setEditable = function(iseditable) {
-      editable = iseditable;
-      if(!editable) {
-        stopEditing()
-      }
-    };
     function processClick(evt) {
       evt = evt || window.event;
-      var e = evt.target, selection = window.getSelection(), range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null, startContainer = range && range.startContainer, startOffset = range && range.startOffset, endContainer = range && range.endContainer, endOffset = range && range.endOffset;
+      var e = evt.target, selection = window.getSelection(), range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null, startContainer = range && range.startContainer, startOffset = range && range.startOffset, endContainer = range && range.endContainer, endOffset = range && range.endOffset, clickdoc, ns;
       while(e && !((e.localName === "p" || e.localName === "h") && e.namespaceURI === textns)) {
         e = e.parentNode
       }
@@ -6545,11 +9148,10 @@ odf.OdfCanvas = function() {
       if(!e || e.parentNode === editparagraph) {
         return
       }
+      clickdoc = e.ownerDocument;
+      ns = clickdoc.documentElement.namespaceURI;
       if(!editparagraph) {
-        editparagraph = e.ownerDocument.createElement("p");
-        if(!editparagraph.style) {
-          editparagraph = e.ownerDocument.createElementNS("http://www.w3.org/1999/xhtml", "p")
-        }
+        editparagraph = clickdoc.createElementNS(ns, "p");
         editparagraph.style.margin = "0px";
         editparagraph.style.padding = "0px";
         editparagraph.style.border = "0px";
@@ -6571,15 +9173,50 @@ odf.OdfCanvas = function() {
       }
       cancelEvent(evt)
     }
+    this.setEditable = function(iseditable) {
+      listenEvent(element, "click", processClick);
+      editable = iseditable;
+      if(!editable) {
+        stopEditing()
+      }
+    };
     this.addListener = function(eventName, handler) {
-      if(eventName === "selectionchange") {
-        selectionWatcher.addListener(eventName, handler)
-      }else {
-        addEventListener(eventName, handler)
+      switch(eventName) {
+        case "selectionchange":
+          selectionWatcher.addListener(eventName, handler);
+          break;
+        case "click":
+          listenEvent(element, eventName, handler);
+          break;
+        default:
+          addEventListener(eventName, handler);
+          break
       }
     };
     this.getFormatting = function() {
       return formatting
+    };
+    this.getAnnotationManager = function() {
+      return annotationManager
+    };
+    this.refreshAnnotations = function() {
+      handleAnnotations(odfcontainer.rootElement)
+    };
+    this.rerenderAnnotations = function() {
+      if(annotationManager) {
+        annotationManager.rerenderAnnotations()
+      }
+    };
+    this.enableAnnotations = function(allow) {
+      if(allow !== allowAnnotations) {
+        allowAnnotations = allow;
+        handleAnnotations(odfcontainer.rootElement)
+      }
+    };
+    this.addAnnotation = function(annotation) {
+      if(annotationManager) {
+        annotationManager.addAnnotation(annotation)
+      }
     };
     this.setZoomLevel = function(zoom) {
       zoomLevel = zoom;
@@ -6601,10 +9238,26 @@ odf.OdfCanvas = function() {
       zoomLevel = width / realWidth;
       fixContainerSize()
     };
+    this.fitSmart = function(width, height) {
+      var realWidth, realHeight, newScale;
+      realWidth = element.offsetWidth / zoomLevel;
+      realHeight = element.offsetHeight / zoomLevel;
+      newScale = width / realWidth;
+      if(height !== undefined) {
+        if(height / realHeight < newScale) {
+          newScale = height / realHeight
+        }
+      }
+      zoomLevel = Math.min(1, newScale);
+      fixContainerSize()
+    };
     this.fitToHeight = function(height) {
       var realHeight = element.offsetHeight / zoomLevel;
       zoomLevel = height / realHeight;
       fixContainerSize()
+    };
+    this.showFirstPage = function() {
+      pageSwitcher.showFirstPage()
     };
     this.showNextPage = function() {
       pageSwitcher.showNextPage()
@@ -6612,16 +9265,4728 @@ odf.OdfCanvas = function() {
     this.showPreviousPage = function() {
       pageSwitcher.showPreviousPage()
     };
-    this.showAllPages = function() {
+    this.showPage = function(n) {
+      pageSwitcher.showPage(n);
+      fixContainerSize()
     };
-    listenEvent(element, "click", processClick)
+    this.getElement = function() {
+      return element
+    }
   };
   return odf.OdfCanvas
 }();
+runtime.loadClass("odf.OdfCanvas");
+odf.CommandLineTools = function CommandLineTools() {
+  this.roundTrip = function(inputfilepath, outputfilepath, callback) {
+    function onready(odfcontainer) {
+      if(odfcontainer.state === odf.OdfContainer.INVALID) {
+        return callback("Document " + inputfilepath + " is invalid.")
+      }
+      if(odfcontainer.state === odf.OdfContainer.DONE) {
+        odfcontainer.saveAs(outputfilepath, function(err) {
+          callback(err)
+        })
+      }else {
+        callback("Document was not completely loaded.")
+      }
+    }
+    var odfcontainer = new odf.OdfContainer(inputfilepath, onready);
+    return odfcontainer
+  };
+  this.render = function(inputfilepath, document, callback) {
+    var body = document.getElementsByTagName("body")[0], odfcanvas;
+    while(body.firstChild) {
+      body.removeChild(body.firstChild)
+    }
+    odfcanvas = new odf.OdfCanvas(body);
+    odfcanvas.addListener("statereadychange", function(err) {
+      callback(err)
+    });
+    odfcanvas.load(inputfilepath)
+  }
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.Server = function Server() {
+};
+ops.Server.prototype.connect = function(timeout, cb) {
+};
+ops.Server.prototype.networkStatus = function() {
+};
+ops.Server.prototype.login = function(login, password, successCb, failCb) {
+};
+ops.Server.prototype.joinSession = function(userId, sessionId, successCb, failCb) {
+};
+ops.Server.prototype.getGenesisUrl = function(sessionId) {
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.NowjsServer = function NowjsServer() {
+  var nowObject;
+  this.getNowObject = function() {
+    return nowObject
+  };
+  this.getGenesisUrl = function(sessionId) {
+    return"/session/" + sessionId + "/genesis"
+  };
+  this.connect = function(timeout, callback) {
+    var accumulatedWaitingTime = 0;
+    if(nowObject) {
+      return
+    }
+    nowObject = runtime.getVariable("now");
+    if(nowObject === undefined) {
+      nowObject = {networkStatus:"unavailable"}
+    }
+    function laterCb() {
+      if(nowObject.networkStatus === "unavailable") {
+        runtime.log("connection to server unavailable.");
+        callback("unavailable");
+        return
+      }
+      if(nowObject.networkStatus !== "ready") {
+        if(accumulatedWaitingTime > timeout) {
+          runtime.log("connection to server timed out.");
+          callback("timeout");
+          return
+        }
+        accumulatedWaitingTime += 100;
+        runtime.getWindow().setTimeout(laterCb, 100)
+      }else {
+        runtime.log("connection to collaboration server established.");
+        callback("ready")
+      }
+    }
+    laterCb()
+  };
+  this.networkStatus = function() {
+    return nowObject ? nowObject.networkStatus : "unavailable"
+  };
+  this.login = function(login, password, successCb, failCb) {
+    if(!nowObject) {
+      failCb("Not connected to server")
+    }else {
+      nowObject.login(login, password, successCb, failCb)
+    }
+  };
+  this.joinSession = function(userId, sessionId, successCb, failCb) {
+    nowObject.joinSession(userId, sessionId, function(memberId) {
+      nowObject.memberid = memberId;
+      successCb(memberId)
+    }, failCb)
+  }
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.Base64");
+runtime.loadClass("core.ByteArrayWriter");
+ops.PullBoxServer = function PullBoxServer(args) {
+  var self = this, token, base64 = new core.Base64;
+  args = args || {};
+  args.url = args.url || "/WSER";
+  this.getGenesisUrl = function(sessionId) {
+    return"/session/" + sessionId + "/genesis"
+  };
+  function call(message, cb) {
+    var xhr = new XMLHttpRequest, byteArrayWriter = new core.ByteArrayWriter("utf8"), messageString = JSON.stringify(message), data;
+    function handleResult() {
+      if(xhr.readyState === 4) {
+        if((xhr.status < 200 || xhr.status >= 300) && xhr.status === 0) {
+          runtime.log("Status " + String(xhr.status) + ": " + xhr.responseText || xhr.statusText)
+        }
+        cb(xhr.responseText)
+      }
+    }
+    runtime.log("Sending message to server: " + messageString);
+    byteArrayWriter.appendString(messageString);
+    data = byteArrayWriter.getByteArray();
+    xhr.open("POST", args.url, true);
+    xhr.onreadystatechange = handleResult;
+    if(data.buffer && !xhr.sendAsBinary) {
+      data = data.buffer
+    }else {
+      data = runtime.byteArrayToString(data, "binary")
+    }
+    try {
+      if(xhr.sendAsBinary) {
+        xhr.sendAsBinary(data)
+      }else {
+        xhr.send(data)
+      }
+    }catch(e) {
+      runtime.log("Problem with calling server: " + e + " " + data);
+      cb(e.message)
+    }
+  }
+  this.call = call;
+  this.getToken = function() {
+    return token
+  };
+  this.setToken = function(a_token) {
+    token = a_token
+  };
+  this.connect = function(timeout, callback) {
+    callback("ready")
+  };
+  this.networkStatus = function() {
+    return"ready"
+  };
+  this.login = function(login, password, successCb, failCb) {
+    call({command:"login", args:{login:base64.toBase64(login), password:base64.toBase64(password)}}, function(responseData) {
+      var response = (runtime.fromJson(responseData));
+      runtime.log("Login reply: " + responseData);
+      if(response.hasOwnProperty("token")) {
+        token = response.token;
+        runtime.log("Caching token: " + self.getToken());
+        successCb(response)
+      }else {
+        failCb(responseData)
+      }
+    })
+  };
+  this.joinSession = function(userId, sessionId, successCb, failCb) {
+    call({command:"join_session", args:{user_id:userId, es_id:sessionId}}, function(responseData) {
+      var response = (runtime.fromJson(responseData));
+      runtime.log("join_session reply: " + responseData);
+      if(response.hasOwnProperty("success") && response.success) {
+        successCb(response.member_id)
+      }else {
+        if(failCb) {
+          failCb()
+        }
+      }
+    })
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.Operation = function Operation() {
+};
+ops.Operation.prototype.init = function(data) {
+};
+ops.Operation.prototype.transform = function(otherOp, hasPriority) {
+};
+ops.Operation.prototype.execute = function(odtDocument) {
+};
+ops.Operation.prototype.spec = function() {
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpAddCursor = function OpAddCursor() {
+  var self = this, memberid, timestamp;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp
+  };
+  this.transform = function(otherOp, hasPriority) {
+    return[self]
+  };
+  this.execute = function(odtDocument) {
+    var cursor = odtDocument.getCursor(memberid);
+    if(cursor) {
+      return false
+    }
+    cursor = new ops.OdtCursor(memberid, odtDocument);
+    odtDocument.addCursor(cursor);
+    odtDocument.emit(ops.OdtDocument.signalCursorAdded, cursor);
+    return true
+  };
+  this.spec = function() {
+    return{optype:"AddCursor", memberid:memberid, timestamp:timestamp}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.DomUtils");
+runtime.loadClass("odf.OdfUtils");
+gui.StyleHelper = function StyleHelper(formatting) {
+  var domUtils = new core.DomUtils, odfUtils = new odf.OdfUtils;
+  this.getAppliedStyles = function(range) {
+    var textNodes = odfUtils.getTextNodes(range, true);
+    return formatting.getAppliedStyles(textNodes)
+  };
+  this.applyStyle = function(memberId, range, info) {
+    var nextTextNodes = domUtils.splitBoundaries(range), textNodes = odfUtils.getTextNodes(range, false), limits;
+    limits = {startContainer:range.startContainer, startOffset:range.startOffset, endContainer:range.endContainer, endOffset:range.endOffset};
+    formatting.applyStyle(memberId, textNodes, limits, info);
+    nextTextNodes.forEach(domUtils.normalizeTextNodes)
+  };
+  function hasTextPropertyValue(range, propertyName, propertyValue) {
+    var hasOtherValue = true, nodes, styles, properties, container, i;
+    if(range.collapsed) {
+      container = range.startContainer;
+      if(container.hasChildNodes() && range.startOffset < container.childNodes.length) {
+        container = container.childNodes[range.startOffset]
+      }
+      nodes = [container]
+    }else {
+      nodes = odfUtils.getTextNodes(range, true)
+    }
+    styles = formatting.getAppliedStyles(nodes);
+    for(i = 0;i < styles.length;i += 1) {
+      properties = styles[i]["style:text-properties"];
+      hasOtherValue = !properties || properties[propertyName] !== propertyValue;
+      if(hasOtherValue) {
+        break
+      }
+    }
+    return!hasOtherValue
+  }
+  this.isBold = function(range) {
+    return hasTextPropertyValue(range, "fo:font-weight", "bold")
+  };
+  this.isItalic = function(range) {
+    return hasTextPropertyValue(range, "fo:font-style", "italic")
+  };
+  this.hasUnderline = function(range) {
+    return hasTextPropertyValue(range, "style:text-underline-style", "solid")
+  };
+  this.hasStrikeThrough = function(range) {
+    return hasTextPropertyValue(range, "style:text-line-through-style", "solid")
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("gui.StyleHelper");
+runtime.loadClass("odf.OdfUtils");
+ops.OpApplyDirectStyling = function OpApplyDirectStyling() {
+  var memberid, timestamp, position, length, setProperties, odfUtils = new odf.OdfUtils;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = parseInt(data.position, 10);
+    length = parseInt(data.length, 10);
+    setProperties = data.setProperties
+  };
+  this.transform = function(otherOp, hasPriority) {
+    return null
+  };
+  function getRange(odtDocument) {
+    var point1 = length >= 0 ? position : position + length, point2 = length >= 0 ? position + length : position, p1 = odtDocument.getIteratorAtPosition(point1), p2 = length ? odtDocument.getIteratorAtPosition(point2) : p1, range = odtDocument.getDOM().createRange();
+    range.setStart(p1.container(), p1.unfilteredDomOffset());
+    range.setEnd(p2.container(), p2.unfilteredDomOffset());
+    return range
+  }
+  this.execute = function(odtDocument) {
+    var range = getRange(odtDocument), impactedParagraphs = odfUtils.getImpactedParagraphs(range), styleHelper = new gui.StyleHelper(odtDocument.getFormatting());
+    styleHelper.applyStyle(memberid, range, setProperties);
+    range.detach();
+    odtDocument.getOdfCanvas().refreshCSS();
+    impactedParagraphs.forEach(function(n) {
+      odtDocument.emit(ops.OdtDocument.signalParagraphChanged, {paragraphElement:n, memberId:memberid, timeStamp:timestamp})
+    });
+    odtDocument.getOdfCanvas().rerenderAnnotations();
+    return true
+  };
+  this.spec = function() {
+    return{optype:"ApplyDirectStyling", memberid:memberid, timestamp:timestamp, position:position, length:length, setProperties:setProperties}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpRemoveCursor = function OpRemoveCursor() {
+  var self = this, optype = "RemoveCursor", memberid, timestamp;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec();
+    if(otherOpspec.optype === optype && otherOpspec.memberid === memberid) {
+      return[]
+    }
+    return[self]
+  };
+  this.execute = function(odtDocument) {
+    if(!odtDocument.removeCursor(memberid)) {
+      return false
+    }
+    return true
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpMoveCursor = function OpMoveCursor() {
+  var self = this, memberid, timestamp, position, length;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = parseInt(data.position, 10);
+    length = data.length !== undefined ? parseInt(data.length, 10) : 0
+  };
+  function countSteps(number, stepCounter, positionFilter) {
+    if(number > 0) {
+      return stepCounter.countForwardSteps(number, positionFilter)
+    }
+    if(number < 0) {
+      return-stepCounter.countBackwardSteps(-number, positionFilter)
+    }
+    return 0
+  }
+  this.merge = function(otherOpspec) {
+    if(otherOpspec.optype === "MoveCursor" && otherOpspec.memberid === memberid) {
+      position = otherOpspec.position;
+      length = otherOpspec.length;
+      timestamp = otherOpspec.timestamp;
+      return true
+    }
+    return false
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOpType = otherOpspec.optype, end = position + length, otherOpspecEnd, result = [self];
+    if(otherOpType === "RemoveText") {
+      otherOpspecEnd = otherOpspec.position + otherOpspec.length;
+      if(otherOpspecEnd <= position) {
+        position -= otherOpspec.length
+      }else {
+        if(otherOpspec.position < end) {
+          if(position < otherOpspec.position) {
+            if(otherOpspecEnd < end) {
+              length = length - otherOpspec.length
+            }else {
+              length = otherOpspec.position - position
+            }
+          }else {
+            position = otherOpspec.position;
+            if(otherOpspecEnd < end) {
+              length = end - otherOpspecEnd
+            }else {
+              length = 0
+            }
+          }
+        }
+      }
+    }else {
+      if(otherOpType === "SplitParagraph") {
+        if(otherOpspec.position < position) {
+          position += 1
+        }else {
+          if(otherOpspec.position > position && otherOpspec.position < end) {
+            length += 1
+          }
+        }
+      }else {
+        if(otherOpType === "InsertText") {
+          if(otherOpspec.position < position) {
+            position += otherOpspec.text.length
+          }else {
+            if(otherOpspec.position > position && otherOpspec.position < end) {
+              length += otherOpspec.text.length
+            }
+          }
+        }else {
+          if(otherOpType === "RemoveCursor" && otherOpspec.memberid === memberid) {
+            result = []
+          }else {
+            if(otherOpType === "InsertTable") {
+              result = null
+            }
+          }
+        }
+      }
+    }
+    return result
+  };
+  this.execute = function(odtDocument) {
+    var cursor = odtDocument.getCursor(memberid), oldPosition = odtDocument.getCursorPosition(memberid), positionFilter = odtDocument.getPositionFilter(), number = position - oldPosition, stepsToSelectionStart, stepsToSelectionEnd, stepCounter;
+    if(!cursor) {
+      return false
+    }
+    stepCounter = cursor.getStepCounter();
+    stepsToSelectionStart = countSteps(number, stepCounter, positionFilter);
+    cursor.move(stepsToSelectionStart);
+    if(length) {
+      stepsToSelectionEnd = countSteps(length, stepCounter, positionFilter);
+      cursor.move(stepsToSelectionEnd, true)
+    }
+    odtDocument.emit(ops.OdtDocument.signalCursorMoved, cursor);
+    return true
+  };
+  this.spec = function() {
+    return{optype:"MoveCursor", memberid:memberid, timestamp:timestamp, position:position, length:length}
+  }
+};
+ops.OpInsertTable = function OpInsertTable() {
+  var self = this, optype = "InsertTable", memberid, timestamp, initialRows, initialColumns, position, tableName, tableStyleName, tableColumnStyleName, tableCellStyleMatrix, tablens = "urn:oasis:names:tc:opendocument:xmlns:table:1.0", textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0";
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = parseInt(data.position, 10);
+    initialRows = parseInt(data.initialRows, 10);
+    initialColumns = parseInt(data.initialColumns, 10);
+    tableName = data.tableName;
+    tableStyleName = data.tableStyleName;
+    tableColumnStyleName = data.tableColumnStyleName;
+    tableCellStyleMatrix = data.tableCellStyleMatrix
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOptype = otherOpspec.optype, result = [self];
+    if(otherOptype === optype) {
+      result = null
+    }else {
+      if(otherOptype === "SplitParagraph") {
+        if(otherOpspec.position < position) {
+          position += 1
+        }else {
+          if(otherOpspec.position === position && !hasPriority) {
+            position += 1;
+            return null
+          }
+        }
+      }else {
+        if(otherOptype === "InsertText") {
+          if(otherOpspec.position < position) {
+            position += otherOpspec.text.length
+          }else {
+            if(otherOpspec.position === position && !hasPriority) {
+              position += otherOpspec.text.length;
+              return null
+            }
+          }
+        }else {
+          if(otherOptype === "RemoveText") {
+            if(otherOpspec.position + otherOpspec.length <= position) {
+              position -= otherOpspec.length
+            }else {
+              if(otherOpspec.position < position) {
+                position = otherOpspec.position
+              }
+            }
+          }
+        }
+      }
+    }
+    return result
+  };
+  function getCellStyleName(row, column) {
+    var rowStyles;
+    if(tableCellStyleMatrix.length === 1) {
+      rowStyles = tableCellStyleMatrix[0]
+    }else {
+      if(tableCellStyleMatrix.length === 3) {
+        switch(row) {
+          case 0:
+            rowStyles = tableCellStyleMatrix[0];
+            break;
+          case initialRows - 1:
+            rowStyles = tableCellStyleMatrix[2];
+            break;
+          default:
+            rowStyles = tableCellStyleMatrix[1];
+            break
+        }
+      }else {
+        rowStyles = tableCellStyleMatrix[row]
+      }
+    }
+    if(rowStyles.length === 1) {
+      return rowStyles[0]
+    }
+    if(rowStyles.length === 3) {
+      switch(column) {
+        case 0:
+          return rowStyles[0];
+        case initialColumns - 1:
+          return rowStyles[2];
+        default:
+          return rowStyles[1]
+      }
+    }
+    return rowStyles[column]
+  }
+  function createTableNode(document) {
+    var tableNode = document.createElementNS(tablens, "table:table"), columns = document.createElementNS(tablens, "table:table-column"), row, cell, paragraph, rowCounter, columnCounter, cellStyleName;
+    if(tableStyleName) {
+      tableNode.setAttributeNS(tablens, "table:style-name", tableStyleName)
+    }
+    if(tableName) {
+      tableNode.setAttributeNS(tablens, "table:name", tableName)
+    }
+    columns.setAttributeNS(tablens, "table:number-columns-repeated", initialColumns);
+    if(tableColumnStyleName) {
+      columns.setAttributeNS(tablens, "table:style-name", tableColumnStyleName)
+    }
+    tableNode.appendChild(columns);
+    for(rowCounter = 0;rowCounter < initialRows;rowCounter += 1) {
+      row = document.createElementNS(tablens, "table:table-row");
+      for(columnCounter = 0;columnCounter < initialColumns;columnCounter += 1) {
+        cell = document.createElementNS(tablens, "table:table-cell");
+        cellStyleName = getCellStyleName(rowCounter, columnCounter);
+        if(cellStyleName) {
+          cell.setAttributeNS(tablens, "table:style-name", cellStyleName)
+        }
+        paragraph = document.createElementNS(textns, "text:p");
+        cell.appendChild(paragraph);
+        row.appendChild(cell)
+      }
+      tableNode.appendChild(row)
+    }
+    return tableNode
+  }
+  this.execute = function(odtDocument) {
+    var domPosition = odtDocument.getPositionInTextNode(position), rootNode = odtDocument.getRootNode(), previousSibling, tableNode;
+    if(domPosition) {
+      tableNode = createTableNode(odtDocument.getDOM());
+      previousSibling = odtDocument.getParagraphElement(domPosition.textNode);
+      rootNode.insertBefore(tableNode, previousSibling ? previousSibling.nextSibling : undefined);
+      odtDocument.getOdfCanvas().refreshSize();
+      odtDocument.emit(ops.OdtDocument.signalTableAdded, {tableElement:tableNode, memberId:memberid, timeStamp:timestamp});
+      odtDocument.getOdfCanvas().rerenderAnnotations();
+      return true
+    }
+    return false
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, position:position, initialRows:initialRows, initialColumns:initialColumns, tableName:tableName, tableStyleName:tableStyleName, tableColumnStyleName:tableColumnStyleName, tableCellStyleMatrix:tableCellStyleMatrix}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpInsertText = function OpInsertText() {
+  var self = this, optype = "InsertText", memberid, timestamp, position, text;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = parseInt(data.position, 10);
+    text = data.text
+  };
+  this.merge = function(otherOpspec) {
+    if(otherOpspec.optype === optype && otherOpspec.memberid === memberid && otherOpspec.position === position + text.length) {
+      text = text + otherOpspec.text;
+      timestamp = otherOpspec.timestamp;
+      return true
+    }
+    return false
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOptype = otherOpspec.optype, result = [self];
+    if(otherOptype === optype) {
+      if(otherOpspec.position < position) {
+        position += otherOpspec.text.length
+      }else {
+        if(otherOpspec.position === position && !hasPriority) {
+          position += otherOpspec.text.length;
+          return null
+        }
+      }
+    }else {
+      if(otherOptype === "SplitParagraph") {
+        if(otherOpspec.position < position) {
+          position += 1
+        }else {
+          if(otherOpspec.position === position && !hasPriority) {
+            position += 1;
+            return null
+          }
+        }
+      }else {
+        if(otherOptype === "InsertTable") {
+          result = null
+        }else {
+          if(otherOptype === "RemoveText") {
+            if(otherOpspec.position + otherOpspec.length <= position) {
+              position -= otherOpspec.length
+            }else {
+              if(otherOpspec.position < position) {
+                position = otherOpspec.position
+              }
+            }
+          }
+        }
+      }
+    }
+    return result
+  };
+  function triggerLayoutInWebkit(odtDocument, textNode) {
+    var parent = textNode.parentNode, next = textNode.nextSibling, impactedCursors = [];
+    odtDocument.getCursors().forEach(function(cursor) {
+      var range = cursor.getSelectedRange();
+      if(range && (range.startContainer === textNode || range.endContainer === textNode)) {
+        impactedCursors.push({cursor:cursor, startContainer:range.startContainer, startOffset:range.startOffset, endContainer:range.endContainer, endOffset:range.endOffset})
+      }
+    });
+    parent.removeChild(textNode);
+    parent.insertBefore(textNode, next);
+    impactedCursors.forEach(function(entry) {
+      var range = entry.cursor.getSelectedRange();
+      range.setStart(entry.startContainer, entry.startOffset);
+      range.setEnd(entry.endContainer, entry.endOffset)
+    })
+  }
+  this.execute = function(odtDocument) {
+    var domPosition, previousNode, parent, refNode, ownerDocument = odtDocument.getRootNode().ownerDocument, paragraphElement, textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", space = " ", tab = "\t", append = true, startIndex = 0, textToInsert, spaceTag, node, i;
+    domPosition = odtDocument.getPositionInTextNode(position, memberid);
+    if(domPosition) {
+      previousNode = domPosition.textNode;
+      parent = previousNode.parentNode;
+      refNode = previousNode.nextSibling;
+      paragraphElement = odtDocument.getParagraphElement(previousNode);
+      if(domPosition.offset !== previousNode.length) {
+        refNode = previousNode.splitText(domPosition.offset)
+      }
+      for(i = 0;i < text.length;i += 1) {
+        if(text[i] === space || text[i] === tab) {
+          if(startIndex < i) {
+            textToInsert = text.substring(startIndex, i);
+            if(append) {
+              previousNode.appendData(textToInsert)
+            }else {
+              parent.insertBefore(ownerDocument.createTextNode(textToInsert), refNode)
+            }
+          }
+          startIndex = i + 1;
+          append = false;
+          spaceTag = text[i] === space ? "text:s" : "text:tab";
+          node = ownerDocument.createElementNS(textns, spaceTag);
+          node.appendChild(ownerDocument.createTextNode(text[i]));
+          parent.insertBefore(node, refNode)
+        }
+      }
+      textToInsert = text.substring(startIndex);
+      if(textToInsert.length > 0) {
+        if(append) {
+          previousNode.appendData(textToInsert)
+        }else {
+          parent.insertBefore(ownerDocument.createTextNode(textToInsert), refNode)
+        }
+      }
+      triggerLayoutInWebkit(odtDocument, previousNode);
+      if(previousNode.length === 0) {
+        previousNode.parentNode.removeChild(previousNode)
+      }
+      odtDocument.getOdfCanvas().refreshSize();
+      odtDocument.emit(ops.OdtDocument.signalParagraphChanged, {paragraphElement:paragraphElement, memberId:memberid, timeStamp:timestamp});
+      odtDocument.getOdfCanvas().rerenderAnnotations();
+      return true
+    }
+    return false
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, position:position, text:text}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("odf.Namespaces");
+runtime.loadClass("odf.OdfUtils");
+runtime.loadClass("core.DomUtils");
+ops.OpRemoveText = function OpRemoveText() {
+  var self = this, optype = "RemoveText", memberid, timestamp, position, length, text, odfUtils, domUtils, editinfons = "urn:webodf:names:editinfo";
+  this.init = function(data) {
+    runtime.assert(data.length >= 0, "OpRemoveText only supports positive lengths");
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = parseInt(data.position, 10);
+    length = parseInt(data.length, 10);
+    text = data.text;
+    odfUtils = new odf.OdfUtils;
+    domUtils = new core.DomUtils
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOptype = otherOpspec.optype, end = position + length, otherOpspecEnd, result = [self];
+    if(otherOptype === optype) {
+      otherOpspecEnd = otherOpspec.position + otherOpspec.length;
+      if(otherOpspecEnd <= position) {
+        position -= otherOpspec.length
+      }else {
+        if(otherOpspec.position < end) {
+          if(position < otherOpspec.position) {
+            if(otherOpspecEnd < end) {
+              length = length - otherOpspec.length
+            }else {
+              length = otherOpspec.position - position
+            }
+          }else {
+            if(otherOpspecEnd < end) {
+              position = otherOpspec.position;
+              length = end - otherOpspecEnd
+            }else {
+              result = []
+            }
+          }
+        }
+      }
+    }else {
+      if(otherOptype === "InsertText") {
+        if(otherOpspec.position <= position) {
+          position += otherOpspec.text.length
+        }
+      }else {
+        if(otherOptype === "SplitParagraph") {
+          if(otherOpspec.position <= position) {
+            position += 1
+          }
+        }else {
+          if(otherOptype === "InsertTable") {
+            result = null
+          }
+        }
+      }
+    }
+    return result
+  };
+  function CollapsingRules(rootNode) {
+    function isEmpty(node) {
+      var childNode;
+      if(odfUtils.isCharacterElement(node)) {
+        return false
+      }
+      if(node.nodeType === Node.TEXT_NODE) {
+        return node.textContent.length === 0
+      }
+      childNode = node.firstChild;
+      while(childNode) {
+        if(!isEmpty(childNode)) {
+          return false
+        }
+        childNode = childNode.nextSibling
+      }
+      return true
+    }
+    this.isEmpty = isEmpty;
+    function isCollapsibleContainer(node) {
+      return!odfUtils.isParagraph(node) && node !== rootNode && isEmpty(node)
+    }
+    function mergeChildrenIntoParent(node) {
+      var parent = domUtils.mergeIntoParent(node);
+      if(isCollapsibleContainer(parent)) {
+        return mergeChildrenIntoParent(parent)
+      }
+      return parent
+    }
+    this.mergeChildrenIntoParent = mergeChildrenIntoParent
+  }
+  function mergeParagraphs(first, second, collapseRules) {
+    var child, mergeForward, destination = first, source = second, secondParent, insertionPoint;
+    if(collapseRules.isEmpty(first)) {
+      mergeForward = true;
+      if(second.parentNode !== first.parentNode) {
+        secondParent = second.parentNode;
+        first.parentNode.insertBefore(second, first.nextSibling)
+      }
+      source = first;
+      destination = second;
+      insertionPoint = destination.getElementsByTagNameNS(editinfons, "editinfo")[0] || destination.firstChild
+    }
+    while(source.hasChildNodes()) {
+      child = mergeForward ? source.lastChild : source.firstChild;
+      source.removeChild(child);
+      if(child.localName !== "editinfo") {
+        destination.insertBefore(child, insertionPoint)
+      }
+    }
+    if(secondParent && collapseRules.isEmpty(secondParent)) {
+      collapseRules.mergeChildrenIntoParent(secondParent)
+    }
+    collapseRules.mergeChildrenIntoParent(source);
+    return destination
+  }
+  function stepsToRange(odtDocument) {
+    var iterator, filter = odtDocument.getPositionFilter(), startContainer, startOffset, endContainer, endOffset, remainingLength = length, range = odtDocument.getDOM().createRange();
+    iterator = odtDocument.getIteratorAtPosition(position);
+    startContainer = iterator.container();
+    startOffset = iterator.unfilteredDomOffset();
+    while(remainingLength && iterator.nextPosition()) {
+      endContainer = iterator.container();
+      endOffset = iterator.unfilteredDomOffset();
+      if(filter.acceptPosition(iterator) === NodeFilter.FILTER_ACCEPT) {
+        remainingLength -= 1
+      }
+    }
+    range.setStart(startContainer, startOffset);
+    range.setEnd(endContainer, endOffset);
+    domUtils.splitBoundaries(range);
+    return range
+  }
+  this.execute = function(odtDocument) {
+    var paragraphElement, destinationParagraph, range, textNodes, paragraphs, collapseRules = new CollapsingRules(odtDocument.getRootNode());
+    odtDocument.upgradeWhitespacesAtPosition(position);
+    odtDocument.upgradeWhitespacesAtPosition(position + length);
+    range = stepsToRange(odtDocument);
+    paragraphElement = odtDocument.getParagraphElement(range.startContainer);
+    textNodes = odtDocument.getTextElements(range, true);
+    paragraphs = odtDocument.getParagraphElements(range);
+    range.detach();
+    textNodes.forEach(function(element) {
+      collapseRules.mergeChildrenIntoParent(element)
+    });
+    destinationParagraph = paragraphs.reduce(function(destination, paragraph) {
+      return mergeParagraphs(destination, paragraph, collapseRules)
+    });
+    odtDocument.fixCursorPositions();
+    odtDocument.getOdfCanvas().refreshSize();
+    odtDocument.emit(ops.OdtDocument.signalParagraphChanged, {paragraphElement:destinationParagraph || paragraphElement, memberId:memberid, timeStamp:timestamp});
+    odtDocument.emit(ops.OdtDocument.signalCursorMoved, odtDocument.getCursor(memberid));
+    odtDocument.getOdfCanvas().rerenderAnnotations();
+    return true
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, position:position, length:length, text:text}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpSplitParagraph = function OpSplitParagraph() {
+  var self = this, optype = "SplitParagraph", memberid, timestamp, position, odfUtils = new odf.OdfUtils;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = parseInt(data.position, 10)
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOptype = otherOpspec.optype, result = [self];
+    if(otherOptype === optype) {
+      if(otherOpspec.position < position) {
+        position += 1
+      }else {
+        if(otherOpspec.position === position && !hasPriority) {
+          position += 1;
+          return null
+        }
+      }
+    }else {
+      if(otherOptype === "InsertText") {
+        if(otherOpspec.position < position) {
+          position += otherOpspec.text.length
+        }else {
+          if(otherOpspec.position === position && !hasPriority) {
+            position += otherOpspec.text.length;
+            return null
+          }
+        }
+      }else {
+        if(otherOptype === "InsertTable") {
+          result = null
+        }else {
+          if(otherOptype === "RemoveText") {
+            if(otherOpspec.position + otherOpspec.length <= position) {
+              position -= otherOpspec.length
+            }else {
+              if(otherOpspec.position < position) {
+                position = otherOpspec.position
+              }
+            }
+          }
+        }
+      }
+    }
+    return result
+  };
+  this.execute = function(odtDocument) {
+    var domPosition, paragraphNode, targetNode, node, splitNode, splitChildNode, keptChildNode;
+    odtDocument.upgradeWhitespacesAtPosition(position);
+    domPosition = odtDocument.getPositionInTextNode(position, memberid);
+    if(!domPosition) {
+      return false
+    }
+    paragraphNode = odtDocument.getParagraphElement(domPosition.textNode);
+    if(!paragraphNode) {
+      return false
+    }
+    if(odfUtils.isListItem(paragraphNode.parentNode)) {
+      targetNode = paragraphNode.parentNode
+    }else {
+      targetNode = paragraphNode
+    }
+    if(domPosition.offset === 0) {
+      keptChildNode = domPosition.textNode.previousSibling;
+      splitChildNode = null
+    }else {
+      keptChildNode = domPosition.textNode;
+      if(domPosition.offset >= domPosition.textNode.length) {
+        splitChildNode = null
+      }else {
+        splitChildNode = (domPosition.textNode.splitText(domPosition.offset))
+      }
+    }
+    node = domPosition.textNode;
+    while(node !== targetNode) {
+      node = node.parentNode;
+      splitNode = node.cloneNode(false);
+      if(!keptChildNode) {
+        node.parentNode.insertBefore(splitNode, node);
+        keptChildNode = splitNode;
+        splitChildNode = node
+      }else {
+        if(splitChildNode) {
+          splitNode.appendChild(splitChildNode)
+        }
+        while(keptChildNode.nextSibling) {
+          splitNode.appendChild(keptChildNode.nextSibling)
+        }
+        node.parentNode.insertBefore(splitNode, node.nextSibling);
+        keptChildNode = node;
+        splitChildNode = splitNode
+      }
+    }
+    if(odfUtils.isListItem(splitChildNode)) {
+      splitChildNode = splitChildNode.childNodes[0]
+    }
+    odtDocument.fixCursorPositions(memberid);
+    odtDocument.getOdfCanvas().refreshSize();
+    odtDocument.emit(ops.OdtDocument.signalParagraphChanged, {paragraphElement:paragraphNode, memberId:memberid, timeStamp:timestamp});
+    odtDocument.emit(ops.OdtDocument.signalParagraphChanged, {paragraphElement:splitChildNode, memberId:memberid, timeStamp:timestamp});
+    odtDocument.getOdfCanvas().rerenderAnnotations();
+    return true
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, position:position}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpSetParagraphStyle = function OpSetParagraphStyle() {
+  var self = this, optype = "SetParagraphStyle", memberid, timestamp, position, styleName, textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0";
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    position = data.position;
+    styleName = data.styleName
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOpType = otherOpspec.optype;
+    if(otherOpType === "RemoveParagraphStyle") {
+      if(otherOpspec.styleName === styleName) {
+        styleName = ""
+      }
+    }
+    return[self]
+  };
+  this.execute = function(odtDocument) {
+    var domPosition, paragraphNode;
+    domPosition = odtDocument.getPositionInTextNode(position);
+    if(domPosition) {
+      paragraphNode = odtDocument.getParagraphElement(domPosition.textNode);
+      if(paragraphNode) {
+        if(styleName !== "") {
+          paragraphNode.setAttributeNS(textns, "text:style-name", styleName)
+        }else {
+          paragraphNode.removeAttributeNS(textns, "style-name")
+        }
+        odtDocument.getOdfCanvas().refreshSize();
+        odtDocument.emit(ops.OdtDocument.signalParagraphChanged, {paragraphElement:paragraphNode, timeStamp:timestamp, memberId:memberid});
+        odtDocument.getOdfCanvas().rerenderAnnotations();
+        return true
+      }
+    }
+    return false
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, position:position, styleName:styleName}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpUpdateParagraphStyle = function OpUpdateParagraphStyle() {
+  var self = this, optype = "UpdateParagraphStyle", memberid, timestamp, styleName, setProperties, removedProperties, stylens = "urn:oasis:names:tc:opendocument:xmlns:style:1.0", svgns = "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0";
+  function removePropertiesFromStyleNode(node, removedPropertyNames) {
+    var i, propertyNameParts;
+    for(i = 0;i < removedPropertyNames.length;i += 1) {
+      propertyNameParts = removedPropertyNames[i].split(":");
+      node.removeAttributeNS(odf.Namespaces.resolvePrefix(propertyNameParts[0]), propertyNameParts[1])
+    }
+  }
+  function dropShadowedProperties(properties, removedPropertyNames, shadowingProperties, shadowingRemovedPropertyNames) {
+    var value, i, name;
+    if(properties && (shadowingProperties || shadowingRemovedPropertyNames)) {
+      Object.keys(properties).forEach(function(key) {
+        value = properties[key];
+        if(shadowingProperties && shadowingProperties[key] !== undefined || shadowingRemovedPropertyNames && shadowingRemovedPropertyNames.indexOf(key) !== -1) {
+          if(typeof value !== "object") {
+            delete properties[key]
+          }
+        }
+      })
+    }
+    if(removedPropertyNames && (shadowingProperties || shadowingRemovedPropertyNames)) {
+      for(i = 0;i < removedPropertyNames.length;i += 1) {
+        name = removedPropertyNames[i];
+        if(shadowingProperties && shadowingProperties[name] !== undefined || shadowingRemovedPropertyNames && shadowingRemovedPropertyNames.indexOf(name) !== -1) {
+          removedPropertyNames.splice(i, 1);
+          i -= 1
+        }
+      }
+    }
+  }
+  function hasProperties(properties) {
+    var i;
+    for(i in properties) {
+      if(properties.hasOwnProperty(i)) {
+        return true
+      }
+    }
+    return false
+  }
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    styleName = data.styleName;
+    setProperties = data.setProperties;
+    removedProperties = data.removedProperties
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOpType = otherOpspec.optype;
+    if(otherOpType === optype) {
+      if(otherOpspec.styleName === styleName) {
+        if(!hasPriority) {
+          dropShadowedProperties(setProperties ? setProperties["style:paragraph-properties"] : null, removedProperties ? removedProperties.paragraphPropertyNames : null, otherOpspec.setProperties ? otherOpspec.setProperties["style:paragraph-properties"] : null, otherOpspec.removedProperties ? otherOpspec.removedProperties.paragraphPropertyNames : null);
+          dropShadowedProperties(setProperties ? setProperties["style:text-properties"] : null, removedProperties ? removedProperties.textPropertyNames : null, otherOpspec.setProperties ? otherOpspec.setProperties["style:text-properties"] : null, otherOpspec.removedProperties ? otherOpspec.removedProperties.textPropertyNames : null);
+          if(!(setProperties && (hasProperties(setProperties["style:text-properties"]) || hasProperties(setProperties["style:paragraph-properties"]))) && !(removedProperties && (removedProperties.textPropertyNames.length > 0 || removedProperties.paragraphPropertyNames.length > 0))) {
+            return[]
+          }
+        }
+      }
+    }else {
+      if(otherOpType === "RemoveParagraphStyle") {
+        if(otherOpspec.styleName === styleName) {
+          return[]
+        }
+      }
+    }
+    return[self]
+  };
+  this.execute = function(odtDocument) {
+    var styleNode, paragraphPropertiesNode, textPropertiesNode, fontFaceNode, fontName, formatting = odtDocument.getFormatting();
+    styleNode = odtDocument.getParagraphStyleElement(styleName);
+    if(styleNode) {
+      paragraphPropertiesNode = styleNode.getElementsByTagNameNS(stylens, "paragraph-properties")[0];
+      textPropertiesNode = styleNode.getElementsByTagNameNS(stylens, "text-properties")[0];
+      if(setProperties) {
+        if(paragraphPropertiesNode === undefined && setProperties["style:paragraph-properties"]) {
+          paragraphPropertiesNode = odtDocument.getDOM().createElementNS(stylens, "style:paragraph-properties");
+          styleNode.appendChild(paragraphPropertiesNode)
+        }
+        if(textPropertiesNode === undefined && setProperties["style:text-properties"]) {
+          textPropertiesNode = odtDocument.getDOM().createElementNS(stylens, "style:text-properties");
+          styleNode.appendChild(textPropertiesNode)
+        }
+        if(setProperties["style:paragraph-properties"]) {
+          formatting.updateStyle(paragraphPropertiesNode, setProperties["style:paragraph-properties"])
+        }
+        if(setProperties["style:text-properties"]) {
+          fontName = setProperties["style:text-properties"]["style:font-name"];
+          if(fontName && !formatting.getFontMap().hasOwnProperty(fontName)) {
+            fontFaceNode = odtDocument.getDOM().createElementNS(stylens, "style:font-face");
+            fontFaceNode.setAttributeNS(stylens, "style:name", fontName);
+            fontFaceNode.setAttributeNS(svgns, "svg:font-family", fontName);
+            odtDocument.getOdfCanvas().odfContainer().rootElement.fontFaceDecls.appendChild(fontFaceNode)
+          }
+          formatting.updateStyle(textPropertiesNode, setProperties["style:text-properties"])
+        }
+      }
+      if(removedProperties) {
+        if(removedProperties.paragraphPropertyNames) {
+          removePropertiesFromStyleNode(paragraphPropertiesNode, removedProperties.paragraphPropertyNames);
+          if(paragraphPropertiesNode.attributes.length === 0) {
+            styleNode.removeChild(paragraphPropertiesNode)
+          }
+        }
+        if(removedProperties.textPropertyNames) {
+          removePropertiesFromStyleNode(textPropertiesNode, removedProperties.textPropertyNames);
+          if(textPropertiesNode.attributes.length === 0) {
+            styleNode.removeChild(textPropertiesNode)
+          }
+        }
+      }
+      odtDocument.getOdfCanvas().refreshCSS();
+      odtDocument.emit(ops.OdtDocument.signalParagraphStyleModified, styleName);
+      odtDocument.getOdfCanvas().rerenderAnnotations();
+      return true
+    }
+    return false
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, styleName:styleName, setProperties:setProperties, removedProperties:removedProperties}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("odf.Namespaces");
+ops.OpAddParagraphStyle = function OpAddParagraphStyle() {
+  var self = this, memberid, timestamp, styleName, setProperties, paragraphPropertiesName = "style:paragraph-properties", textPropertiesName = "style:text-properties", svgns = odf.Namespaces.svgns, stylens = odf.Namespaces.stylens;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    styleName = data.styleName;
+    setProperties = data.setProperties
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherSpec = otherOp.spec();
+    if((otherSpec.optype === "UpdateParagraphStyle" || otherSpec.optype === "RemoveParagraphStyle") && otherSpec.styleName === styleName) {
+      return null
+    }
+    return[self]
+  };
+  this.execute = function(odtDocument) {
+    var odfContainer = odtDocument.getOdfCanvas().odfContainer(), formatting = odtDocument.getFormatting(), dom = odtDocument.getDOM(), styleNode = dom.createElementNS(stylens, "style:style"), paragraphPropertiesNode, textPropertiesNode, fontFaceNode, fontName, ns;
+    if(!styleNode) {
+      return false
+    }
+    styleNode.setAttributeNS(stylens, "style:family", "paragraph");
+    styleNode.setAttributeNS(stylens, "style:name", styleName);
+    if(setProperties) {
+      Object.keys(setProperties).forEach(function(propertyName) {
+        switch(propertyName) {
+          case paragraphPropertiesName:
+            paragraphPropertiesNode = dom.createElementNS(stylens, paragraphPropertiesName);
+            styleNode.appendChild(paragraphPropertiesNode);
+            formatting.updateStyle(paragraphPropertiesNode, setProperties[paragraphPropertiesName]);
+            break;
+          case textPropertiesName:
+            textPropertiesNode = dom.createElementNS(stylens, textPropertiesName);
+            styleNode.appendChild(textPropertiesNode);
+            fontName = setProperties[textPropertiesName]["style:font-name"];
+            if(fontName && !formatting.getFontMap().hasOwnProperty(fontName)) {
+              fontFaceNode = dom.createElementNS(stylens, "style:font-face");
+              fontFaceNode.setAttributeNS(stylens, "style:name", fontName);
+              fontFaceNode.setAttributeNS(svgns, "svg:font-family", fontName);
+              odfContainer.rootElement.fontFaceDecls.appendChild(fontFaceNode)
+            }
+            formatting.updateStyle(textPropertiesNode, setProperties[textPropertiesName]);
+            break;
+          default:
+            if(typeof setProperties[propertyName] !== "object") {
+              ns = odf.Namespaces.resolvePrefix(propertyName.substr(0, propertyName.indexOf(":")));
+              styleNode.setAttributeNS(ns, propertyName, setProperties[propertyName])
+            }
+        }
+      })
+    }
+    odfContainer.rootElement.styles.appendChild(styleNode);
+    odtDocument.getOdfCanvas().refreshCSS();
+    odtDocument.emit(ops.OdtDocument.signalStyleCreated, styleName);
+    return true
+  };
+  this.spec = function() {
+    return{optype:"AddParagraphStyle", memberid:memberid, timestamp:timestamp, styleName:styleName, setProperties:setProperties}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpRemoveParagraphStyle = function OpRemoveParagraphStyle() {
+  var self = this, optype = "RemoveParagraphStyle", memberid, timestamp, styleName;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = data.timestamp;
+    styleName = data.styleName
+  };
+  this.transform = function(otherOp, hasPriority) {
+    var otherOpspec = otherOp.spec(), otherOpType = otherOpspec.optype, removeStyleOp;
+    if(otherOpType === optype) {
+      if(otherOpspec.styleName === styleName) {
+        return[]
+      }
+    }else {
+      if(otherOpType === "SetParagraphStyle") {
+        if(otherOpspec.styleName === styleName) {
+          otherOpspec.styleName = "";
+          removeStyleOp = new ops.OpSetParagraphStyle;
+          removeStyleOp.init(otherOpspec);
+          return[removeStyleOp, self]
+        }
+      }
+    }
+    return[self]
+  };
+  this.execute = function(odtDocument) {
+    var styleNode = odtDocument.getParagraphStyleElement(styleName);
+    if(!styleNode) {
+      return false
+    }
+    styleNode.parentNode.removeChild(styleNode);
+    odtDocument.getOdfCanvas().refreshCSS();
+    odtDocument.emit(ops.OdtDocument.signalStyleDeleted, styleName);
+    return true
+  };
+  this.spec = function() {
+    return{optype:optype, memberid:memberid, timestamp:timestamp, styleName:styleName}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OpAddAnnotation = function OpAddAnnotation() {
+  var memberid, timestamp, position, length, name;
+  this.init = function(data) {
+    memberid = data.memberid;
+    timestamp = parseInt(data.timestamp, 10);
+    position = parseInt(data.position, 10);
+    length = parseInt(data.length, 10) || 0;
+    name = data.name
+  };
+  this.transform = function(otherOp, hasPriority) {
+    if(otherOp || hasPriority) {
+      return null
+    }
+    return null
+  };
+  function createAnnotationNode(odtDocument, date) {
+    var annotationNode, creatorNode, dateNode, listNode, listItemNode, paragraphNode, doc = odtDocument.getRootNode().ownerDocument;
+    annotationNode = doc.createElementNS(odf.Namespaces.officens, "office:annotation");
+    annotationNode.setAttributeNS(odf.Namespaces.officens, "office:name", name);
+    creatorNode = doc.createElementNS(odf.Namespaces.dcns, "dc:creator");
+    creatorNode.setAttributeNS(odf.Namespaces.webodfns + ":names:editinfo", "editinfo:memberid", memberid);
+    dateNode = doc.createElementNS(odf.Namespaces.dcns, "dc:date");
+    dateNode.appendChild(doc.createTextNode(date.toISOString()));
+    listNode = doc.createElementNS(odf.Namespaces.textns, "text:list");
+    listItemNode = doc.createElementNS(odf.Namespaces.textns, "text:list-item");
+    paragraphNode = doc.createElementNS(odf.Namespaces.textns, "text:p");
+    listItemNode.appendChild(paragraphNode);
+    listNode.appendChild(listItemNode);
+    annotationNode.appendChild(creatorNode);
+    annotationNode.appendChild(dateNode);
+    annotationNode.appendChild(listNode);
+    return annotationNode
+  }
+  function createAnnotationEnd(odtDocument) {
+    var annotationEnd, doc = odtDocument.getRootNode().ownerDocument;
+    annotationEnd = doc.createElementNS(odf.Namespaces.officens, "office:annotation-end");
+    annotationEnd.setAttributeNS(odf.Namespaces.officens, "office:name", name);
+    return annotationEnd
+  }
+  function insertNodeAtPosition(odtDocument, node, insertPosition) {
+    var previousNode, domPosition = odtDocument.getPositionInTextNode(insertPosition);
+    if(domPosition) {
+      previousNode = domPosition.textNode;
+      if(domPosition.offset !== previousNode.length) {
+        previousNode.splitText(domPosition.offset)
+      }
+      previousNode.parentNode.insertBefore(node, previousNode.nextSibling)
+    }
+  }
+  this.execute = function(odtDocument) {
+    var annotation = {};
+    annotation.node = createAnnotationNode(odtDocument, new Date(timestamp));
+    if(!annotation.node) {
+      return false
+    }
+    if(length) {
+      annotation.end = createAnnotationEnd(odtDocument);
+      if(!annotation.end) {
+        return false
+      }
+      insertNodeAtPosition(odtDocument, annotation.end, position + length)
+    }
+    insertNodeAtPosition(odtDocument, annotation.node, position);
+    odtDocument.getOdfCanvas().addAnnotation(annotation);
+    return true
+  };
+  this.spec = function() {
+    return{optype:"AddAnnotation", memberid:memberid, timestamp:timestamp, position:position, length:length, name:name}
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("ops.OpAddCursor");
+runtime.loadClass("ops.OpApplyDirectStyling");
+runtime.loadClass("ops.OpRemoveCursor");
+runtime.loadClass("ops.OpMoveCursor");
+runtime.loadClass("ops.OpInsertTable");
+runtime.loadClass("ops.OpInsertText");
+runtime.loadClass("ops.OpRemoveText");
+runtime.loadClass("ops.OpSplitParagraph");
+runtime.loadClass("ops.OpSetParagraphStyle");
+runtime.loadClass("ops.OpUpdateParagraphStyle");
+runtime.loadClass("ops.OpAddParagraphStyle");
+runtime.loadClass("ops.OpRemoveParagraphStyle");
+runtime.loadClass("ops.OpAddAnnotation");
+ops.OperationFactory = function OperationFactory() {
+  var specs;
+  this.register = function(specName, specConstructor) {
+    specs[specName] = specConstructor
+  };
+  this.create = function(spec) {
+    var op = null, specConstructor = specs[spec.optype];
+    if(specConstructor) {
+      op = specConstructor(spec);
+      op.init(spec)
+    }
+    return op
+  };
+  function constructor(OperationType) {
+    return function() {
+      return new OperationType
+    }
+  }
+  function init() {
+    specs = {AddCursor:constructor(ops.OpAddCursor), ApplyDirectStyling:constructor(ops.OpApplyDirectStyling), InsertTable:constructor(ops.OpInsertTable), InsertText:constructor(ops.OpInsertText), RemoveText:constructor(ops.OpRemoveText), SplitParagraph:constructor(ops.OpSplitParagraph), SetParagraphStyle:constructor(ops.OpSetParagraphStyle), UpdateParagraphStyle:constructor(ops.OpUpdateParagraphStyle), AddParagraphStyle:constructor(ops.OpAddParagraphStyle), RemoveParagraphStyle:constructor(ops.OpRemoveParagraphStyle), 
+    MoveCursor:constructor(ops.OpMoveCursor), RemoveCursor:constructor(ops.OpRemoveCursor), AddAnnotation:constructor(ops.OpAddAnnotation)}
+  }
+  init()
+};
+runtime.loadClass("core.Cursor");
+runtime.loadClass("core.PositionIterator");
+runtime.loadClass("core.PositionFilter");
+runtime.loadClass("core.LoopWatchDog");
+runtime.loadClass("odf.OdfUtils");
+gui.SelectionMover = function SelectionMover(cursor, rootNode) {
+  var odfUtils, positionIterator, cachedXOffset, timeoutHandle, FILTER_ACCEPT = core.PositionFilter.FilterResult.FILTER_ACCEPT;
+  function getOffset(el) {
+    var x = 0, y = 0;
+    while(el && el.nodeType === Node.ELEMENT_NODE) {
+      x += el.offsetLeft - el.scrollLeft;
+      y += el.offsetTop - el.scrollTop;
+      el = el.parentNode
+    }
+    return{top:y, left:x}
+  }
+  function getIteratorAtCursor() {
+    positionIterator.setUnfilteredPosition(cursor.getNode(), 0);
+    return positionIterator
+  }
+  function getRect(container, offset, range) {
+    var rect, containerOffset;
+    range.setStart(container, offset);
+    rect = range.getClientRects()[0];
+    if(!rect) {
+      rect = {};
+      if(container.childNodes[offset - 1]) {
+        range.setStart(container, offset - 1);
+        range.setEnd(container, offset);
+        containerOffset = range.getClientRects()[0];
+        if(!containerOffset) {
+          containerOffset = getOffset(container)
+        }
+        runtime.assert(containerOffset, "getRect: invalid containerOffset");
+        rect.top = containerOffset.top;
+        rect.left = containerOffset.right;
+        rect.bottom = containerOffset.bottom
+      }else {
+        if(container.nodeType === Node.TEXT_NODE) {
+          if(container.previousSibling) {
+            rect = container.previousSibling.getClientRects()[0]
+          }
+          if(!rect) {
+            range.setStart(container, 0);
+            range.setEnd(container, offset);
+            rect = range.getClientRects()[0]
+          }
+        }else {
+          rect = container.getClientRects()[0]
+        }
+      }
+    }
+    runtime.assert(rect, "getRect invalid rect");
+    runtime.assert(rect.top !== undefined, "getRect rect without top property");
+    return{top:rect.top, left:rect.left, bottom:rect.bottom}
+  }
+  function doMove(steps, extend, move) {
+    var left = steps, iterator = getIteratorAtCursor(), initialRect, range = (rootNode.ownerDocument.createRange()), selectionRange = cursor.getSelectedRange() ? cursor.getSelectedRange().cloneRange() : rootNode.ownerDocument.createRange(), newRect, horizontalMovement, o, c, isForwardSelection, window = runtime.getWindow();
+    initialRect = getRect((cursor.getNode()), 0, range);
+    while(left > 0 && move()) {
+      left -= 1
+    }
+    if(extend) {
+      c = iterator.container();
+      o = iterator.unfilteredDomOffset();
+      if(selectionRange.comparePoint(c, o) === -1) {
+        selectionRange.setStart(c, o);
+        isForwardSelection = false
+      }else {
+        selectionRange.setEnd(c, o)
+      }
+    }else {
+      selectionRange.setStart(iterator.container(), iterator.unfilteredDomOffset());
+      selectionRange.collapse(true)
+    }
+    cursor.setSelectedRange(selectionRange, isForwardSelection);
+    newRect = getRect((cursor.getNode()), 0, range);
+    horizontalMovement = newRect.top === initialRect.top ? true : false;
+    if(horizontalMovement || cachedXOffset === undefined) {
+      cachedXOffset = newRect.left
+    }
+    window.clearTimeout(timeoutHandle);
+    timeoutHandle = window.setTimeout(function() {
+      cachedXOffset = undefined
+    }, 2E3);
+    range.detach();
+    return steps - left
+  }
+  this.movePointForward = function(steps, extend) {
+    return doMove(steps, extend, positionIterator.nextPosition)
+  };
+  this.movePointBackward = function(steps, extend) {
+    return doMove(steps, extend, positionIterator.previousPosition)
+  };
+  function isPositionWalkable(filter) {
+    var iterator = getIteratorAtCursor();
+    if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+      return true
+    }
+    return false
+  }
+  function countForwardSteps(steps, filter) {
+    var iterator = getIteratorAtCursor(), watch = new core.LoopWatchDog(1E3), stepCount = 0, count = 0;
+    while(steps > 0 && iterator.nextPosition()) {
+      stepCount += 1;
+      watch.check();
+      if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+        count += stepCount;
+        stepCount = 0;
+        steps -= 1
+      }
+    }
+    return count
+  }
+  function convertForwardStepsBetweenFilters(steps, filter1, filter2) {
+    var iterator = getIteratorAtCursor(), watch = new core.LoopWatchDog(1E3), stepCount = 0, count = 0;
+    while(steps > 0 && iterator.nextPosition()) {
+      watch.check();
+      if(filter2.acceptPosition(iterator) === FILTER_ACCEPT) {
+        stepCount += 1;
+        if(filter1.acceptPosition(iterator) === FILTER_ACCEPT) {
+          count += stepCount;
+          stepCount = 0;
+          steps -= 1
+        }
+      }
+    }
+    return count
+  }
+  function convertBackwardStepsBetweenFilters(steps, filter1, filter2) {
+    var iterator = getIteratorAtCursor(), watch = new core.LoopWatchDog(1E3), stepCount = 0, count = 0;
+    while(steps > 0 && iterator.previousPosition()) {
+      watch.check();
+      if(filter2.acceptPosition(iterator) === FILTER_ACCEPT) {
+        stepCount += 1;
+        if(filter1.acceptPosition(iterator) === FILTER_ACCEPT) {
+          count += stepCount;
+          stepCount = 0;
+          steps -= 1
+        }
+      }
+    }
+    return count
+  }
+  function countBackwardSteps(steps, filter) {
+    var iterator = getIteratorAtCursor(), watch = new core.LoopWatchDog(1E3), stepCount = 0, count = 0;
+    while(steps > 0 && iterator.previousPosition()) {
+      stepCount += 1;
+      watch.check();
+      if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+        count += stepCount;
+        stepCount = 0;
+        steps -= 1
+      }
+    }
+    return count
+  }
+  function countStepsToValidPosition(filter) {
+    var iterator = getIteratorAtCursor(), paragraphNode = odfUtils.getParagraphElement(iterator.getCurrentNode()), count;
+    count = -countBackwardSteps(1, filter);
+    if(count === 0 || paragraphNode && paragraphNode !== odfUtils.getParagraphElement(iterator.getCurrentNode())) {
+      count = countForwardSteps(1, filter)
+    }
+    return count
+  }
+  function countLineSteps(filter, direction, iterator) {
+    var c = iterator.container(), count = 0, bestContainer = null, bestOffset, bestXDiff = 10, xDiff, bestCount = 0, top, left, lastTop, rect, range = (rootNode.ownerDocument.createRange()), watch = new core.LoopWatchDog(1E3);
+    rect = getRect(c, iterator.unfilteredDomOffset(), range);
+    top = rect.top;
+    if(cachedXOffset === undefined) {
+      left = rect.left
+    }else {
+      left = cachedXOffset
+    }
+    lastTop = top;
+    while((direction < 0 ? iterator.previousPosition() : iterator.nextPosition()) === true) {
+      watch.check();
+      if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+        count += 1;
+        c = iterator.container();
+        rect = getRect(c, iterator.unfilteredDomOffset(), range);
+        if(rect.top !== top) {
+          if(rect.top !== lastTop && lastTop !== top) {
+            break
+          }
+          lastTop = rect.top;
+          xDiff = Math.abs(left - rect.left);
+          if(bestContainer === null || xDiff < bestXDiff) {
+            bestContainer = c;
+            bestOffset = iterator.unfilteredDomOffset();
+            bestXDiff = xDiff;
+            bestCount = count
+          }
+        }
+      }
+    }
+    if(bestContainer !== null) {
+      iterator.setUnfilteredPosition(bestContainer, (bestOffset));
+      count = bestCount
+    }else {
+      count = 0
+    }
+    range.detach();
+    return count
+  }
+  function countLinesSteps(lines, filter) {
+    var iterator = getIteratorAtCursor(), stepCount = 0, count = 0, direction = lines < 0 ? -1 : 1;
+    lines = Math.abs(lines);
+    while(lines > 0) {
+      stepCount += countLineSteps(filter, direction, iterator);
+      if(stepCount === 0) {
+        break
+      }
+      count += stepCount;
+      lines -= 1
+    }
+    return count * direction
+  }
+  function countStepsToLineBoundary(direction, filter) {
+    var fnNextPos, increment, lastRect, rect, onSameLine, iterator = getIteratorAtCursor(), paragraphNode = odfUtils.getParagraphElement(iterator.getCurrentNode()), count = 0, range = (rootNode.ownerDocument.createRange());
+    if(direction < 0) {
+      fnNextPos = iterator.previousPosition;
+      increment = -1
+    }else {
+      fnNextPos = iterator.nextPosition;
+      increment = 1
+    }
+    lastRect = getRect(iterator.container(), iterator.unfilteredDomOffset(), range);
+    while(fnNextPos.call(iterator)) {
+      if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+        if(odfUtils.getParagraphElement(iterator.getCurrentNode()) !== paragraphNode) {
+          break
+        }
+        rect = getRect(iterator.container(), iterator.unfilteredDomOffset(), range);
+        if(rect.bottom !== lastRect.bottom) {
+          onSameLine = rect.top >= lastRect.top && rect.bottom < lastRect.bottom || rect.top <= lastRect.top && rect.bottom > lastRect.bottom;
+          if(!onSameLine) {
+            break
+          }
+        }
+        count += increment;
+        lastRect = rect
+      }
+    }
+    range.detach();
+    return count
+  }
+  function getPositionInContainingNode(node, container) {
+    var offset = 0, n;
+    while(node.parentNode !== container) {
+      runtime.assert(node.parentNode !== null, "parent is null");
+      node = (node.parentNode)
+    }
+    n = container.firstChild;
+    while(n !== node) {
+      offset += 1;
+      n = n.nextSibling
+    }
+    return offset
+  }
+  function comparePoints(c1, o1, c2, o2) {
+    if(c1 === c2) {
+      return o2 - o1
+    }
+    var comparison = c1.compareDocumentPosition(c2);
+    if(comparison === 2) {
+      comparison = -1
+    }else {
+      if(comparison === 4) {
+        comparison = 1
+      }else {
+        if(comparison === 10) {
+          o1 = getPositionInContainingNode(c1, c2);
+          comparison = o1 < o2 ? 1 : -1
+        }else {
+          o2 = getPositionInContainingNode(c2, c1);
+          comparison = o2 < o1 ? -1 : 1
+        }
+      }
+    }
+    return comparison
+  }
+  function countStepsToPosition(posElement, posOffset, filter) {
+    runtime.assert(posElement !== null, "SelectionMover.countStepsToPosition called with element===null");
+    var iterator = getIteratorAtCursor(), c = iterator.container(), o = iterator.unfilteredDomOffset(), steps = 0, watch = new core.LoopWatchDog(1E3), comparison;
+    iterator.setUnfilteredPosition(posElement, posOffset);
+    posElement = (iterator.container());
+    runtime.assert(Boolean(posElement), "SelectionMover.countStepsToPosition: positionIterator.container() returned null");
+    posOffset = iterator.unfilteredDomOffset();
+    iterator.setUnfilteredPosition(c, o);
+    comparison = comparePoints(posElement, posOffset, iterator.container(), iterator.unfilteredDomOffset());
+    if(comparison < 0) {
+      while(iterator.nextPosition()) {
+        watch.check();
+        if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+          steps += 1
+        }
+        if(iterator.container() === posElement) {
+          if(iterator.unfilteredDomOffset() === posOffset) {
+            return steps
+          }
+        }
+      }
+    }else {
+      if(comparison > 0) {
+        while(iterator.previousPosition()) {
+          watch.check();
+          if(filter.acceptPosition(iterator) === FILTER_ACCEPT) {
+            steps -= 1
+          }
+          if(iterator.container() === posElement) {
+            if(iterator.unfilteredDomOffset() === posOffset) {
+              return steps
+            }
+          }
+        }
+      }
+    }
+    return steps
+  }
+  this.getStepCounter = function() {
+    return{countForwardSteps:countForwardSteps, countBackwardSteps:countBackwardSteps, convertForwardStepsBetweenFilters:convertForwardStepsBetweenFilters, convertBackwardStepsBetweenFilters:convertBackwardStepsBetweenFilters, countLinesSteps:countLinesSteps, countStepsToLineBoundary:countStepsToLineBoundary, countStepsToPosition:countStepsToPosition, isPositionWalkable:isPositionWalkable, countStepsToValidPosition:countStepsToValidPosition}
+  };
+  function init() {
+    odfUtils = new odf.OdfUtils;
+    positionIterator = gui.SelectionMover.createPositionIterator(rootNode);
+    var range = rootNode.ownerDocument.createRange();
+    range.setStart(positionIterator.container(), positionIterator.unfilteredDomOffset());
+    range.collapse(true);
+    cursor.setSelectedRange(range)
+  }
+  init()
+};
+gui.SelectionMover.createPositionIterator = function(rootNode) {
+  function CursorFilter() {
+    this.acceptNode = function(node) {
+      if(node.namespaceURI === "urn:webodf:names:cursor" || node.namespaceURI === "urn:webodf:names:editinfo") {
+        return NodeFilter.FILTER_REJECT
+      }
+      return NodeFilter.FILTER_ACCEPT
+    }
+  }
+  var filter = new CursorFilter;
+  return new core.PositionIterator(rootNode, 5, filter, false)
+};
+(function() {
+  return gui.SelectionMover
+})();
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("ops.OpAddCursor");
+runtime.loadClass("ops.OpRemoveCursor");
+runtime.loadClass("ops.OpMoveCursor");
+runtime.loadClass("ops.OpInsertTable");
+runtime.loadClass("ops.OpInsertText");
+runtime.loadClass("ops.OpRemoveText");
+runtime.loadClass("ops.OpSplitParagraph");
+runtime.loadClass("ops.OpSetParagraphStyle");
+runtime.loadClass("ops.OpAddParagraphStyle");
+runtime.loadClass("ops.OpUpdateParagraphStyle");
+runtime.loadClass("ops.OpRemoveParagraphStyle");
+ops.OperationTransformer = function OperationTransformer() {
+  var operationFactory;
+  function transformOpVsOp(opA, opB) {
+    var oldOpB, opATransformResult, opBTransformResult;
+    runtime.log("Crosstransforming:");
+    runtime.log(runtime.toJson(opA.spec()));
+    runtime.log(runtime.toJson(opB.spec()));
+    oldOpB = operationFactory.create(opB.spec());
+    opBTransformResult = opB.transform(opA, true);
+    opATransformResult = opA.transform(oldOpB, false);
+    if(!opATransformResult || !opBTransformResult) {
+      return null
+    }
+    return{opsA:opATransformResult, opsB:opBTransformResult}
+  }
+  function transformOpListVsOp(opsA, opB) {
+    var b, transformResult, transformListResult, transformedOpsA = [], transformedOpsB = [];
+    while(opsA.length > 0 && opB) {
+      transformResult = transformOpVsOp(opsA.shift(), (opB));
+      if(!transformResult) {
+        return null
+      }
+      transformedOpsA = transformedOpsA.concat(transformResult.opsA);
+      if(transformResult.opsB.length === 0) {
+        transformedOpsA = transformedOpsA.concat(opsA);
+        opB = null;
+        break
+      }
+      if(transformResult.opsB.length > 1) {
+        for(b = 0;b < transformResult.opsB.length - 1;b += 1) {
+          transformListResult = transformOpListVsOp(opsA, transformResult.opsB[b]);
+          if(!transformListResult) {
+            return null
+          }
+          transformedOpsB = transformedOpsB.concat(transformListResult.opsB);
+          opsA = transformListResult.opsA
+        }
+      }
+      opB = transformResult.opsB.pop()
+    }
+    if(opB) {
+      transformedOpsB.push(opB)
+    }
+    return{opsA:transformedOpsA, opsB:transformedOpsB}
+  }
+  this.setOperationFactory = function(f) {
+    operationFactory = f
+  };
+  this.transform = function(opspecsA, opspecsB) {
+    var c, s, opsA = [], clientOp, serverOp, transformResult, transformedOpsB = [];
+    for(c = 0;c < opspecsA.length;c += 1) {
+      clientOp = operationFactory.create(opspecsA[c]);
+      if(!clientOp) {
+        return null
+      }
+      opsA.push(clientOp)
+    }
+    for(s = 0;s < opspecsB.length;s += 1) {
+      serverOp = operationFactory.create(opspecsB[s]);
+      transformResult = transformOpListVsOp(opsA, serverOp);
+      if(!transformResult) {
+        return null
+      }
+      opsA = transformResult.opsA;
+      transformedOpsB = transformedOpsB.concat(transformResult.opsB)
+    }
+    return{opsA:opsA, opsB:transformedOpsB}
+  }
+};
+runtime.loadClass("core.Cursor");
+runtime.loadClass("gui.SelectionMover");
+ops.OdtCursor = function OdtCursor(memberId, odtDocument) {
+  var self = this, selectionMover, cursor;
+  this.removeFromOdtDocument = function() {
+    cursor.remove()
+  };
+  this.move = function(number, extend) {
+    var moved = 0;
+    if(number > 0) {
+      moved = selectionMover.movePointForward(number, extend)
+    }else {
+      if(number <= 0) {
+        moved = -selectionMover.movePointBackward(-number, extend)
+      }
+    }
+    self.handleUpdate();
+    return moved
+  };
+  this.handleUpdate = function() {
+  };
+  this.getStepCounter = function() {
+    return selectionMover.getStepCounter()
+  };
+  this.getMemberId = function() {
+    return memberId
+  };
+  this.getNode = function() {
+    return cursor.getNode()
+  };
+  this.getAnchorNode = function() {
+    return cursor.getAnchorNode()
+  };
+  this.getSelectedRange = function() {
+    return cursor.getSelectedRange()
+  };
+  this.getOdtDocument = function() {
+    return odtDocument
+  };
+  function init() {
+    cursor = new core.Cursor(odtDocument.getDOM(), memberId);
+    selectionMover = new gui.SelectionMover(cursor, odtDocument.getRootNode())
+  }
+  init()
+};
+/*
+
+ Copyright (C) 2012 KO GmbH <aditya.bhatt@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.EditInfo = function EditInfo(container, odtDocument) {
+  var editInfoNode, editHistory = {};
+  function sortEdits() {
+    var arr = [], memberid;
+    for(memberid in editHistory) {
+      if(editHistory.hasOwnProperty(memberid)) {
+        arr.push({"memberid":memberid, "time":editHistory[memberid].time})
+      }
+    }
+    arr.sort(function(a, b) {
+      return a.time - b.time
+    });
+    return arr
+  }
+  this.getNode = function() {
+    return editInfoNode
+  };
+  this.getOdtDocument = function() {
+    return odtDocument
+  };
+  this.getEdits = function() {
+    return editHistory
+  };
+  this.getSortedEdits = function() {
+    return sortEdits()
+  };
+  this.addEdit = function(memberid, timestamp) {
+    editHistory[memberid] = {time:timestamp}
+  };
+  this.clearEdits = function() {
+    editHistory = {}
+  };
+  function init() {
+    var editInfons = "urn:webodf:names:editinfo", dom = odtDocument.getDOM();
+    editInfoNode = dom.createElementNS(editInfons, "editinfo");
+    container.insertBefore(editInfoNode, container.firstChild)
+  }
+  init()
+};
+gui.Avatar = function Avatar(parentElement, avatarInitiallyVisible) {
+  var self = this, handle, image, pendingImageUrl, displayShown = "block", displayHidden = "none";
+  this.setColor = function(color) {
+    image.style.borderColor = color
+  };
+  this.setImageUrl = function(url) {
+    if(self.isVisible()) {
+      image.src = url
+    }else {
+      pendingImageUrl = url
+    }
+  };
+  this.isVisible = function() {
+    return handle.style.display === displayShown
+  };
+  this.show = function() {
+    if(pendingImageUrl) {
+      image.src = pendingImageUrl;
+      pendingImageUrl = undefined
+    }
+    handle.style.display = displayShown
+  };
+  this.hide = function() {
+    handle.style.display = displayHidden
+  };
+  this.markAsFocussed = function(isFocussed) {
+    handle.className = isFocussed ? "active" : ""
+  };
+  function init() {
+    var document = (parentElement.ownerDocument), htmlns = document.documentElement.namespaceURI;
+    handle = document.createElementNS(htmlns, "div");
+    image = document.createElementNS(htmlns, "img");
+    image.width = 64;
+    image.height = 64;
+    handle.appendChild(image);
+    handle.style.width = "64px";
+    handle.style.height = "70px";
+    handle.style.position = "absolute";
+    handle.style.top = "-80px";
+    handle.style.left = "-34px";
+    handle.style.display = avatarInitiallyVisible ? displayShown : displayHidden;
+    parentElement.appendChild(handle)
+  }
+  init()
+};
+runtime.loadClass("gui.Avatar");
+runtime.loadClass("ops.OdtCursor");
+gui.Caret = function Caret(cursor, avatarInitiallyVisible, blinkOnRangeSelect) {
+  var span, avatar, cursorNode, shouldBlink = false, blinking = false, blinkTimeout;
+  function blink(reset) {
+    if(!shouldBlink || !cursorNode.parentNode) {
+      return
+    }
+    if(!blinking || reset) {
+      if(reset && blinkTimeout !== undefined) {
+        runtime.clearTimeout(blinkTimeout)
+      }
+      blinking = true;
+      span.style.opacity = reset || span.style.opacity === "0" ? "1" : "0";
+      blinkTimeout = runtime.setTimeout(function() {
+        blinking = false;
+        blink(false)
+      }, 500)
+    }
+  }
+  function pixelCount(size) {
+    var match;
+    if(typeof size === "string") {
+      if(size === "") {
+        return 0
+      }
+      match = /^(\d+)(\.\d+)?px$/.exec(size);
+      runtime.assert(match !== null, "size [" + size + "] does not have unit px.");
+      return parseFloat(match[1])
+    }
+    return size
+  }
+  function getOffsetBaseElement(element) {
+    var anchorElement = element, nodeStyle, window = runtime.getWindow();
+    runtime.assert(window !== null, "Expected to be run in an environment which has a global window, like a browser.");
+    do {
+      anchorElement = anchorElement.parentElement;
+      if(!anchorElement) {
+        break
+      }
+      nodeStyle = window.getComputedStyle(anchorElement, null)
+    }while(nodeStyle.display !== "block");
+    return anchorElement
+  }
+  function getRelativeOffsetTopLeftBySpacing(element, containerElement) {
+    var x = 0, y = 0, elementStyle, window = runtime.getWindow();
+    runtime.assert(window !== null, "Expected to be run in an environment which has a global window, like a browser.");
+    while(element && element !== containerElement) {
+      elementStyle = window.getComputedStyle(element, null);
+      x += pixelCount(elementStyle.marginLeft) + pixelCount(elementStyle.borderLeftWidth) + pixelCount(elementStyle.paddingLeft);
+      y += pixelCount(elementStyle.marginTop) + pixelCount(elementStyle.borderTopWidth) + pixelCount(elementStyle.paddingTop);
+      element = element.parentElement
+    }
+    return{x:x, y:y}
+  }
+  function getRelativeOffsetTopLeft(element, containerElement) {
+    var reachedContainerElement, offsetParent, e, x = 0, y = 0, resultBySpacing;
+    if(!element || !containerElement) {
+      return{x:0, y:0}
+    }
+    reachedContainerElement = false;
+    do {
+      offsetParent = element.offsetParent;
+      e = element.parentNode;
+      while(e !== offsetParent) {
+        if(e === containerElement) {
+          resultBySpacing = getRelativeOffsetTopLeftBySpacing(element, containerElement);
+          x += resultBySpacing.x;
+          y += resultBySpacing.y;
+          reachedContainerElement = true;
+          break
+        }
+        e = e.parentNode
+      }
+      if(reachedContainerElement) {
+        break
+      }
+      x += pixelCount(element.offsetLeft);
+      y += pixelCount(element.offsetTop);
+      element = offsetParent
+    }while(element && element !== containerElement);
+    return{x:x, y:y}
+  }
+  function getRelativeCaretOffsetRect(caretElement, containerElement, margin) {
+    var caretOffsetTopLeft, offsetBaseNode;
+    offsetBaseNode = getOffsetBaseElement(caretElement);
+    caretOffsetTopLeft = getRelativeOffsetTopLeft(offsetBaseNode, containerElement);
+    caretOffsetTopLeft.x += caretElement.offsetLeft;
+    caretOffsetTopLeft.y += caretElement.offsetTop;
+    return{left:caretOffsetTopLeft.x - margin, top:caretOffsetTopLeft.y - margin, right:caretOffsetTopLeft.x + caretElement.scrollWidth - 1 + margin, bottom:caretOffsetTopLeft.y + caretElement.scrollHeight - 1 + margin}
+  }
+  this.refreshCursorBlinking = function() {
+    if(blinkOnRangeSelect || cursor.getSelectedRange().collapsed) {
+      shouldBlink = true;
+      blink(true)
+    }else {
+      shouldBlink = false;
+      span.style.opacity = "0"
+    }
+  };
+  this.setFocus = function() {
+    shouldBlink = true;
+    avatar.markAsFocussed(true);
+    blink(true)
+  };
+  this.removeFocus = function() {
+    shouldBlink = false;
+    avatar.markAsFocussed(false);
+    span.style.opacity = "0"
+  };
+  this.setAvatarImageUrl = function(url) {
+    avatar.setImageUrl(url)
+  };
+  this.setColor = function(newColor) {
+    span.style.borderColor = newColor;
+    avatar.setColor(newColor)
+  };
+  this.getCursor = function() {
+    return cursor
+  };
+  this.getFocusElement = function() {
+    return span
+  };
+  this.toggleHandleVisibility = function() {
+    if(avatar.isVisible()) {
+      avatar.hide()
+    }else {
+      avatar.show()
+    }
+  };
+  this.showHandle = function() {
+    avatar.show()
+  };
+  this.hideHandle = function() {
+    avatar.hide()
+  };
+  this.ensureVisible = function() {
+    var canvasElement = cursor.getOdtDocument().getOdfCanvas().getElement(), canvasContainerElement = canvasElement.parentNode, caretOffsetRect, caretMargin = 5;
+    caretOffsetRect = getRelativeCaretOffsetRect(span, canvasContainerElement, caretMargin);
+    if(caretOffsetRect.top < canvasContainerElement.scrollTop) {
+      canvasContainerElement.scrollTop = caretOffsetRect.top
+    }else {
+      if(caretOffsetRect.bottom > canvasContainerElement.scrollTop + canvasContainerElement.clientHeight - 1) {
+        canvasContainerElement.scrollTop = caretOffsetRect.bottom - canvasContainerElement.clientHeight + 1
+      }
+    }
+    if(caretOffsetRect.left < canvasContainerElement.scrollLeft) {
+      canvasContainerElement.scrollLeft = caretOffsetRect.left
+    }else {
+      if(caretOffsetRect.right > canvasContainerElement.scrollLeft + canvasContainerElement.clientWidth - 1) {
+        canvasContainerElement.scrollLeft = caretOffsetRect.right - canvasContainerElement.clientWidth + 1
+      }
+    }
+  };
+  function init() {
+    var dom = cursor.getOdtDocument().getDOM(), htmlns = dom.documentElement.namespaceURI;
+    span = dom.createElementNS(htmlns, "span");
+    cursorNode = cursor.getNode();
+    cursorNode.appendChild(span);
+    avatar = new gui.Avatar(cursorNode, avatarInitiallyVisible)
+  }
+  init()
+};
+runtime.loadClass("core.EventNotifier");
+gui.ClickHandler = function ClickHandler() {
+  var clickTimer, clickCount = 0, clickPosition = null, eventNotifier = new core.EventNotifier([gui.ClickHandler.signalSingleClick, gui.ClickHandler.signalDoubleClick, gui.ClickHandler.signalTripleClick]);
+  function resetClick() {
+    clickCount = 0;
+    clickPosition = null
+  }
+  this.subscribe = function(eventid, cb) {
+    eventNotifier.subscribe(eventid, cb)
+  };
+  this.handleMouseUp = function(e) {
+    var window = runtime.getWindow();
+    if(clickPosition && clickPosition.x === e.screenX && clickPosition.y === e.screenY) {
+      clickCount += 1;
+      if(clickCount === 1) {
+        eventNotifier.emit(gui.ClickHandler.signalSingleClick, e)
+      }else {
+        if(clickCount === 2) {
+          eventNotifier.emit(gui.ClickHandler.signalDoubleClick, undefined)
+        }else {
+          if(clickCount === 3) {
+            window.clearTimeout(clickTimer);
+            eventNotifier.emit(gui.ClickHandler.signalTripleClick, undefined);
+            resetClick()
+          }
+        }
+      }
+    }else {
+      eventNotifier.emit(gui.ClickHandler.signalSingleClick, e);
+      clickCount = 1;
+      clickPosition = {x:e.screenX, y:e.screenY};
+      window.clearTimeout(clickTimer);
+      clickTimer = window.setTimeout(resetClick, 400)
+    }
+  }
+};
+gui.ClickHandler.signalSingleClick = "click";
+gui.ClickHandler.signalDoubleClick = "doubleClick";
+gui.ClickHandler.signalTripleClick = "tripleClick";
+(function() {
+  return gui.ClickHandler
+})();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+gui.KeyboardHandler = function KeyboardHandler() {
+  var modifier = gui.KeyboardHandler.Modifier, defaultBinding = null, bindings = {};
+  function getModifiers(e) {
+    var modifiers = modifier.None;
+    if(e.metaKey) {
+      modifiers |= modifier.Meta
+    }
+    if(e.ctrlKey) {
+      modifiers |= modifier.Ctrl
+    }
+    if(e.altKey) {
+      modifiers |= modifier.Alt
+    }
+    if(e.shiftKey) {
+      modifiers |= modifier.Shift
+    }
+    return modifiers
+  }
+  function getKeyCombo(keyCode, modifiers) {
+    if(!modifiers) {
+      modifiers = modifier.None
+    }
+    return keyCode + ":" + modifiers
+  }
+  this.setDefault = function(callback) {
+    defaultBinding = callback
+  };
+  this.bind = function(keyCode, modifiers, callback) {
+    var keyCombo = getKeyCombo(keyCode, modifiers);
+    runtime.assert(bindings.hasOwnProperty(keyCombo) === false, "tried to overwrite the callback handler of key combo: " + keyCombo);
+    bindings[keyCombo] = callback
+  };
+  this.unbind = function(keyCode, modifiers) {
+    var keyCombo = getKeyCombo(keyCode, modifiers);
+    delete bindings[keyCombo]
+  };
+  this.reset = function() {
+    defaultBinding = null;
+    bindings = {}
+  };
+  this.handleEvent = function(e) {
+    var keyCombo = getKeyCombo(e.keyCode, getModifiers(e)), callback = bindings[keyCombo], handled = false;
+    if(callback) {
+      handled = callback()
+    }else {
+      if(defaultBinding !== null) {
+        handled = defaultBinding(e)
+      }
+    }
+    if(handled) {
+      if(e.preventDefault) {
+        e.preventDefault()
+      }else {
+        e.returnValue = false
+      }
+    }
+  }
+};
+gui.KeyboardHandler.Modifier = {None:0, Meta:1, Ctrl:2, Alt:4, Shift:8, MetaShift:9, CtrlShift:10, AltShift:12};
+gui.KeyboardHandler.KeyCode = {Backspace:8, Tab:9, Clear:12, Enter:13, End:35, Home:36, Left:37, Up:38, Right:39, Down:40, Delete:46, A:65, B:66, I:73, U:85, Z:90};
+(function() {
+  return gui.KeyboardHandler
+})();
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("odf.Namespaces");
+runtime.loadClass("xmldom.LSSerializer");
+runtime.loadClass("odf.OdfNodeFilter");
+runtime.loadClass("odf.TextSerializer");
+gui.Clipboard = function Clipboard() {
+  var xmlSerializer, textSerializer, filter;
+  this.setDataFromRange = function(e, range) {
+    var result = true, setDataResult, clipboard = e.clipboardData, window = runtime.getWindow(), document = range.startContainer.ownerDocument, fragmentContainer;
+    if(!clipboard && window) {
+      clipboard = window.clipboardData
+    }
+    if(clipboard) {
+      fragmentContainer = document.createElement("span");
+      fragmentContainer.appendChild(range.cloneContents());
+      setDataResult = clipboard.setData("text/plain", textSerializer.writeToString(fragmentContainer));
+      result = result && setDataResult;
+      setDataResult = clipboard.setData("text/html", xmlSerializer.writeToString(fragmentContainer, odf.Namespaces.namespaceMap));
+      result = result && setDataResult;
+      e.preventDefault()
+    }else {
+      result = false
+    }
+    return result
+  };
+  function init() {
+    xmlSerializer = new xmldom.LSSerializer;
+    textSerializer = new odf.TextSerializer;
+    filter = new odf.OdfNodeFilter;
+    xmlSerializer.filter = filter;
+    textSerializer.filter = filter
+  }
+  init()
+};
+runtime.loadClass("core.DomUtils");
+runtime.loadClass("odf.OdfUtils");
+runtime.loadClass("ops.OpAddCursor");
+runtime.loadClass("ops.OpRemoveCursor");
+runtime.loadClass("ops.OpMoveCursor");
+runtime.loadClass("ops.OpInsertText");
+runtime.loadClass("ops.OpRemoveText");
+runtime.loadClass("ops.OpSplitParagraph");
+runtime.loadClass("ops.OpSetParagraphStyle");
+runtime.loadClass("gui.ClickHandler");
+runtime.loadClass("gui.Clipboard");
+runtime.loadClass("gui.KeyboardHandler");
+runtime.loadClass("gui.StyleHelper");
+gui.SessionController = function() {
+  gui.SessionController = function SessionController(session, inputMemberId) {
+    var window = (runtime.getWindow()), odtDocument = session.getOdtDocument(), domUtils = new core.DomUtils, odfUtils = new odf.OdfUtils, clipboard = new gui.Clipboard, clickHandler = new gui.ClickHandler, keyDownHandler = new gui.KeyboardHandler, keyPressHandler = new gui.KeyboardHandler, styleHelper = new gui.StyleHelper(odtDocument.getFormatting()), keyboardMovementsFilter = new core.PositionFilterChain, baseFilter = odtDocument.getPositionFilter(), undoManager = null;
+    runtime.assert(window !== null, "Expected to be run in an environment which has a global window, like a browser.");
+    keyboardMovementsFilter.addFilter("BaseFilter", baseFilter);
+    keyboardMovementsFilter.addFilter("RootFilter", odtDocument.createRootFilter(inputMemberId));
+    function listenEvent(eventTarget, eventType, eventHandler, includeDirect) {
+      var onVariant = "on" + eventType, bound = false;
+      if(eventTarget.attachEvent) {
+        bound = eventTarget.attachEvent(onVariant, eventHandler)
+      }
+      if(!bound && eventTarget.addEventListener) {
+        eventTarget.addEventListener(eventType, eventHandler, false);
+        bound = true
+      }
+      if((!bound || includeDirect) && eventTarget.hasOwnProperty(onVariant)) {
+        eventTarget[onVariant] = eventHandler
+      }
+    }
+    function removeEvent(eventTarget, eventType, eventHandler) {
+      var onVariant = "on" + eventType;
+      if(eventTarget.detachEvent) {
+        eventTarget.detachEvent(onVariant, eventHandler)
+      }
+      if(eventTarget.removeEventListener) {
+        eventTarget.removeEventListener(eventType, eventHandler, false)
+      }
+      if(eventTarget[onVariant] === eventHandler) {
+        eventTarget[onVariant] = null
+      }
+    }
+    function cancelEvent(event) {
+      if(event.preventDefault) {
+        event.preventDefault()
+      }else {
+        event.returnValue = false
+      }
+    }
+    function dummyHandler(e) {
+      cancelEvent(e)
+    }
+    function createOpMoveCursor(position, length) {
+      var op = new ops.OpMoveCursor;
+      op.init({memberid:inputMemberId, position:position, length:length || 0});
+      return op
+    }
+    function countStepsToNode(targetNode, targetOffset) {
+      var iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode()), canvasElement = odtDocument.getOdfCanvas().getElement(), node;
+      node = targetNode;
+      if(!node) {
+        return null
+      }
+      while(node !== canvasElement) {
+        if(node.namespaceURI === "urn:webodf:names:cursor" && node.localName === "cursor" || node.namespaceURI === "urn:webodf:names:editinfo" && node.localName === "editinfo") {
+          break
+        }
+        node = node.parentNode;
+        if(!node) {
+          return null
+        }
+      }
+      if(node !== canvasElement && targetNode !== node) {
+        targetNode = node.parentNode;
+        targetOffset = Array.prototype.indexOf.call(targetNode.childNodes, node)
+      }
+      iterator.setUnfilteredPosition(targetNode, targetOffset);
+      return odtDocument.getDistanceFromCursor(inputMemberId, iterator.container(), iterator.unfilteredDomOffset())
+    }
+    function caretPositionFromPoint(x, y) {
+      var doc = odtDocument.getDOM(), result;
+      if(doc.caretRangeFromPoint) {
+        result = doc.caretRangeFromPoint(x, y);
+        return{container:result.startContainer, offset:result.startOffset}
+      }
+      if(doc.caretPositionFromPoint) {
+        result = doc.caretPositionFromPoint(x, y);
+        return{container:result.offsetNode, offset:result.offset}
+      }
+      return null
+    }
+    function findClosestPosition(node) {
+      var canvasElement = odtDocument.getOdfCanvas().getElement(), newNode = odtDocument.getRootNode(), newOffset = 0, beforeCanvas, iterator;
+      beforeCanvas = canvasElement.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING;
+      if(!beforeCanvas) {
+        iterator = gui.SelectionMover.createPositionIterator(newNode);
+        iterator.moveToEnd();
+        newNode = iterator.container();
+        newOffset = iterator.unfilteredDomOffset()
+      }
+      return{node:newNode, offset:newOffset}
+    }
+    function getSelection(e) {
+      var canvasElement = odtDocument.getOdfCanvas().getElement(), selection = window.getSelection(), anchorNode, anchorOffset, focusNode, focusOffset, anchorNodeInsideCanvas, focusNodeInsideCanvas, caretPos, node;
+      if(selection.anchorNode === null && selection.focusNode === null) {
+        caretPos = caretPositionFromPoint(e.clientX, e.clientY);
+        if(!caretPos) {
+          return null
+        }
+        anchorNode = (caretPos.container);
+        anchorOffset = caretPos.offset;
+        focusNode = anchorNode;
+        focusOffset = anchorOffset
+      }else {
+        anchorNode = (selection.anchorNode);
+        anchorOffset = selection.anchorOffset;
+        focusNode = (selection.focusNode);
+        focusOffset = selection.focusOffset
+      }
+      runtime.assert(anchorNode !== null && focusNode !== null, "anchorNode is null or focusNode is null");
+      anchorNodeInsideCanvas = domUtils.containsNode(canvasElement, anchorNode);
+      focusNodeInsideCanvas = domUtils.containsNode(canvasElement, focusNode);
+      if(!anchorNodeInsideCanvas && !focusNodeInsideCanvas) {
+        return null
+      }
+      if(!anchorNodeInsideCanvas) {
+        node = findClosestPosition(anchorNode);
+        anchorNode = node.node;
+        anchorOffset = node.offset
+      }
+      if(!focusNodeInsideCanvas) {
+        node = findClosestPosition(focusNode);
+        focusNode = node.node;
+        focusOffset = node.offset
+      }
+      canvasElement.focus();
+      return{anchorNode:anchorNode, anchorOffset:anchorOffset, focusNode:focusNode, focusOffset:focusOffset}
+    }
+    function selectRange(e) {
+      runtime.setTimeout(function() {
+        var selection = getSelection(e), oldPosition, stepsToAnchor, stepsToFocus, op;
+        if(selection === null) {
+          return
+        }
+        stepsToAnchor = countStepsToNode(selection.anchorNode, selection.anchorOffset);
+        if(selection.focusNode === selection.anchorNode && selection.focusOffset === selection.anchorOffset) {
+          stepsToFocus = stepsToAnchor
+        }else {
+          stepsToFocus = countStepsToNode(selection.focusNode, selection.focusOffset)
+        }
+        if(stepsToFocus !== null && stepsToFocus !== 0 || stepsToAnchor !== null && stepsToAnchor !== 0) {
+          oldPosition = odtDocument.getCursorPosition(inputMemberId);
+          op = createOpMoveCursor(oldPosition + stepsToAnchor, stepsToFocus - stepsToAnchor);
+          session.enqueue(op)
+        }
+      }, 0)
+    }
+    function handleContextMenu(e) {
+      selectRange(e)
+    }
+    function selectWord() {
+      var canvasElement = odtDocument.getOdfCanvas().getElement(), alphaNumeric = /[A-Za-z0-9]/, stepsToStart = 0, stepsToEnd = 0, iterator, cursorNode, oldPosition, currentNode, i, c, op;
+      if(!domUtils.containsNode(canvasElement, window.getSelection().focusNode)) {
+        return
+      }
+      iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode());
+      cursorNode = odtDocument.getCursor(inputMemberId).getNode();
+      iterator.setUnfilteredPosition(cursorNode, 0);
+      if(iterator.previousPosition()) {
+        currentNode = iterator.getCurrentNode();
+        if(currentNode.nodeType === Node.TEXT_NODE) {
+          for(i = currentNode.data.length - 1;i >= 0;i -= 1) {
+            c = currentNode.data[i];
+            if(!alphaNumeric.test(c)) {
+              break
+            }
+            stepsToStart -= 1
+          }
+        }
+      }
+      iterator.setUnfilteredPosition(cursorNode, 0);
+      if(iterator.nextPosition()) {
+        currentNode = iterator.getCurrentNode();
+        if(currentNode.nodeType === Node.TEXT_NODE) {
+          for(i = 0;i < currentNode.data.length;i += 1) {
+            c = currentNode.data[i];
+            if(!alphaNumeric.test(c)) {
+              break
+            }
+            stepsToEnd += 1
+          }
+        }
+      }
+      if(stepsToStart !== 0 || stepsToEnd !== 0) {
+        oldPosition = odtDocument.getCursorPosition(inputMemberId);
+        op = createOpMoveCursor(oldPosition + stepsToStart, Math.abs(stepsToStart) + Math.abs(stepsToEnd));
+        session.enqueue(op)
+      }
+    }
+    function selectParagraph() {
+      var canvasElement = odtDocument.getOdfCanvas().getElement(), iterator, paragraphNode, oldPosition, stepsToStart, stepsToEnd, op;
+      if(!domUtils.containsNode(canvasElement, window.getSelection().focusNode)) {
+        return
+      }
+      paragraphNode = odtDocument.getParagraphElement(odtDocument.getCursor(inputMemberId).getNode());
+      stepsToStart = odtDocument.getDistanceFromCursor(inputMemberId, paragraphNode, 0);
+      iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode());
+      iterator.moveToEndOfNode(paragraphNode);
+      stepsToEnd = odtDocument.getDistanceFromCursor(inputMemberId, paragraphNode, iterator.unfilteredDomOffset());
+      if(stepsToStart !== 0 || stepsToEnd !== 0) {
+        oldPosition = odtDocument.getCursorPosition(inputMemberId);
+        op = createOpMoveCursor(oldPosition + stepsToStart, Math.abs(stepsToStart) + Math.abs(stepsToEnd));
+        session.enqueue(op)
+      }
+    }
+    function extendCursorByAdjustment(lengthAdjust) {
+      var selection = odtDocument.getCursorSelection(inputMemberId), stepCounter = odtDocument.getCursor(inputMemberId).getStepCounter(), newLength;
+      if(lengthAdjust !== 0) {
+        lengthAdjust = lengthAdjust > 0 ? stepCounter.convertForwardStepsBetweenFilters(lengthAdjust, keyboardMovementsFilter, baseFilter) : -stepCounter.convertBackwardStepsBetweenFilters(-lengthAdjust, keyboardMovementsFilter, baseFilter);
+        newLength = selection.length + lengthAdjust;
+        session.enqueue(createOpMoveCursor(selection.position, newLength))
+      }
+    }
+    function moveCursorByAdjustment(positionAdjust) {
+      var position = odtDocument.getCursorPosition(inputMemberId), stepCounter = odtDocument.getCursor(inputMemberId).getStepCounter();
+      if(positionAdjust !== 0) {
+        positionAdjust = positionAdjust > 0 ? stepCounter.convertForwardStepsBetweenFilters(positionAdjust, keyboardMovementsFilter, baseFilter) : -stepCounter.convertBackwardStepsBetweenFilters(-positionAdjust, keyboardMovementsFilter, baseFilter);
+        position = position + positionAdjust;
+        session.enqueue(createOpMoveCursor(position, 0))
+      }
+    }
+    function moveCursorToLeft() {
+      moveCursorByAdjustment(-1);
+      return true
+    }
+    function moveCursorToRight() {
+      moveCursorByAdjustment(1);
+      return true
+    }
+    function extendSelectionToLeft() {
+      extendCursorByAdjustment(-1);
+      return true
+    }
+    function extendSelectionToRight() {
+      extendCursorByAdjustment(1);
+      return true
+    }
+    function moveCursorByLine(direction, extend) {
+      var paragraphNode = odtDocument.getParagraphElement(odtDocument.getCursor(inputMemberId).getNode()), steps;
+      runtime.assert(Boolean(paragraphNode), "SessionController: Cursor outside paragraph");
+      steps = odtDocument.getCursor(inputMemberId).getStepCounter().countLinesSteps(direction, keyboardMovementsFilter);
+      if(extend) {
+        extendCursorByAdjustment(steps)
+      }else {
+        moveCursorByAdjustment(steps)
+      }
+    }
+    function moveCursorUp() {
+      moveCursorByLine(-1, false);
+      return true
+    }
+    function moveCursorDown() {
+      moveCursorByLine(1, false);
+      return true
+    }
+    function extendSelectionUp() {
+      moveCursorByLine(-1, true);
+      return true
+    }
+    function extendSelectionDown() {
+      moveCursorByLine(1, true);
+      return true
+    }
+    function moveCursorToLineBoundary(direction, extend) {
+      var steps = odtDocument.getCursor(inputMemberId).getStepCounter().countStepsToLineBoundary(direction, keyboardMovementsFilter);
+      if(extend) {
+        extendCursorByAdjustment(steps)
+      }else {
+        moveCursorByAdjustment(steps)
+      }
+    }
+    function moveCursorToLineStart() {
+      moveCursorToLineBoundary(-1, false);
+      return true
+    }
+    function moveCursorToLineEnd() {
+      moveCursorToLineBoundary(1, false);
+      return true
+    }
+    function extendSelectionToLineStart() {
+      moveCursorToLineBoundary(-1, true);
+      return true
+    }
+    function extendSelectionToLineEnd() {
+      moveCursorToLineBoundary(1, true);
+      return true
+    }
+    function extendSelectionToParagraphStart() {
+      var paragraphNode = odtDocument.getParagraphElement(odtDocument.getCursor(inputMemberId).getNode()), iterator, node, steps;
+      runtime.assert(Boolean(paragraphNode), "SessionController: Cursor outside paragraph");
+      steps = odtDocument.getDistanceFromCursor(inputMemberId, paragraphNode, 0);
+      iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode());
+      iterator.setUnfilteredPosition(paragraphNode, 0);
+      while(steps === 0 && iterator.previousPosition()) {
+        node = iterator.getCurrentNode();
+        if(odfUtils.isParagraph(node)) {
+          steps = odtDocument.getDistanceFromCursor(inputMemberId, node, 0)
+        }
+      }
+      extendCursorByAdjustment(steps);
+      return true
+    }
+    function extendSelectionToParagraphEnd() {
+      var paragraphNode = odtDocument.getParagraphElement(odtDocument.getCursor(inputMemberId).getNode()), iterator, node, steps;
+      runtime.assert(Boolean(paragraphNode), "SessionController: Cursor outside paragraph");
+      iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode());
+      iterator.moveToEndOfNode(paragraphNode);
+      steps = odtDocument.getDistanceFromCursor(inputMemberId, iterator.container(), iterator.unfilteredDomOffset());
+      while(steps === 0 && iterator.nextPosition()) {
+        node = iterator.getCurrentNode();
+        if(odfUtils.isParagraph(node)) {
+          iterator.moveToEndOfNode(node);
+          steps = odtDocument.getDistanceFromCursor(inputMemberId, iterator.container(), iterator.unfilteredDomOffset())
+        }
+      }
+      extendCursorByAdjustment(steps);
+      return true
+    }
+    function moveCursorToDocumentBoundary(direction, extend) {
+      var iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode()), steps;
+      if(direction > 0) {
+        iterator.moveToEnd()
+      }
+      steps = odtDocument.getDistanceFromCursor(inputMemberId, iterator.container(), iterator.unfilteredDomOffset());
+      if(extend) {
+        extendCursorByAdjustment(steps)
+      }else {
+        moveCursorByAdjustment(steps)
+      }
+    }
+    function moveCursorToDocumentStart() {
+      moveCursorToDocumentBoundary(-1, false);
+      return true
+    }
+    function moveCursorToDocumentEnd() {
+      moveCursorToDocumentBoundary(1, false);
+      return true
+    }
+    function extendSelectionToDocumentStart() {
+      moveCursorToDocumentBoundary(-1, true);
+      return true
+    }
+    function extendSelectionToDocumentEnd() {
+      moveCursorToDocumentBoundary(1, true);
+      return true
+    }
+    function extendSelectionToEntireDocument() {
+      var iterator = gui.SelectionMover.createPositionIterator(odtDocument.getRootNode()), steps;
+      steps = -odtDocument.getDistanceFromCursor(inputMemberId, iterator.container(), iterator.unfilteredDomOffset());
+      iterator.moveToEnd();
+      steps += odtDocument.getDistanceFromCursor(inputMemberId, iterator.container(), iterator.unfilteredDomOffset());
+      session.enqueue(createOpMoveCursor(0, steps));
+      return true
+    }
+    function toForwardSelection(selection) {
+      if(selection.length < 0) {
+        selection.position += selection.length;
+        selection.length = -selection.length
+      }
+      return selection
+    }
+    function createOpRemoveSelection(selection) {
+      var op = new ops.OpRemoveText;
+      op.init({memberid:inputMemberId, position:selection.position, length:selection.length});
+      return op
+    }
+    function removeTextByBackspaceKey() {
+      var selection = toForwardSelection(odtDocument.getCursorSelection(inputMemberId)), op = null;
+      if(selection.length === 0) {
+        if(selection.position > 0 && odtDocument.getPositionInTextNode(selection.position - 1)) {
+          op = new ops.OpRemoveText;
+          op.init({memberid:inputMemberId, position:selection.position - 1, length:1});
+          session.enqueue(op)
+        }
+      }else {
+        op = createOpRemoveSelection(selection);
+        session.enqueue(op)
+      }
+      return true
+    }
+    function removeTextByDeleteKey() {
+      var selection = toForwardSelection(odtDocument.getCursorSelection(inputMemberId)), op = null;
+      if(selection.length === 0) {
+        if(odtDocument.getPositionInTextNode(selection.position + 1)) {
+          op = new ops.OpRemoveText;
+          op.init({memberid:inputMemberId, position:selection.position, length:1});
+          session.enqueue(op)
+        }
+      }else {
+        op = createOpRemoveSelection(selection);
+        session.enqueue(op)
+      }
+      return op !== null
+    }
+    function removeTextByClearKey() {
+      var selection = toForwardSelection(odtDocument.getCursorSelection(inputMemberId));
+      if(selection.length !== 0) {
+        session.enqueue(createOpRemoveSelection(selection))
+      }
+      return true
+    }
+    function insertText(text) {
+      var selection = toForwardSelection(odtDocument.getCursorSelection(inputMemberId)), op = null;
+      if(selection.length > 0) {
+        op = createOpRemoveSelection(selection);
+        session.enqueue(op)
+      }
+      op = new ops.OpInsertText;
+      op.init({memberid:inputMemberId, position:selection.position, text:text});
+      session.enqueue(op)
+    }
+    function enqueueParagraphSplittingOps() {
+      var position = odtDocument.getCursorPosition(inputMemberId), op;
+      op = new ops.OpSplitParagraph;
+      op.init({memberid:inputMemberId, position:position});
+      session.enqueue(op);
+      return true
+    }
+    function maintainCursorSelection() {
+      var cursor = odtDocument.getCursor(inputMemberId), selection = window.getSelection();
+      if(cursor) {
+        selection.removeAllRanges();
+        selection.addRange(cursor.getSelectedRange().cloneRange())
+      }
+    }
+    function stringFromKeyPress(event) {
+      if(event.which === null) {
+        return String.fromCharCode(event.keyCode)
+      }
+      if(event.which !== 0 && event.charCode !== 0) {
+        return String.fromCharCode(event.which)
+      }
+      return null
+    }
+    function handleCut(e) {
+      var cursor = odtDocument.getCursor(inputMemberId), selectedRange = cursor.getSelectedRange(), selection, op;
+      if(selectedRange.collapsed) {
+        return
+      }
+      if(clipboard.setDataFromRange(e, cursor.getSelectedRange())) {
+        op = new ops.OpRemoveText;
+        selection = toForwardSelection(session.getOdtDocument().getCursorSelection(inputMemberId));
+        op.init({memberid:inputMemberId, position:selection.position, length:selection.length});
+        session.enqueue(op)
+      }else {
+        runtime.log("Cut operation failed")
+      }
+    }
+    function handleBeforeCut() {
+      var cursor = odtDocument.getCursor(inputMemberId), selectedRange = cursor.getSelectedRange();
+      return selectedRange.collapsed !== false
+    }
+    function handleCopy(e) {
+      var cursor = odtDocument.getCursor(inputMemberId), selectedRange = cursor.getSelectedRange();
+      if(selectedRange.collapsed) {
+        return
+      }
+      if(!clipboard.setDataFromRange(e, cursor.getSelectedRange())) {
+        runtime.log("Cut operation failed")
+      }
+    }
+    function handlePaste(e) {
+      var plainText;
+      if(window.clipboardData && window.clipboardData.getData) {
+        plainText = window.clipboardData.getData("Text")
+      }else {
+        if(e.clipboardData && e.clipboardData.getData) {
+          plainText = e.clipboardData.getData("text/plain")
+        }
+      }
+      if(plainText) {
+        insertText(plainText);
+        cancelEvent(e)
+      }
+    }
+    function handleBeforePaste() {
+      return false
+    }
+    function updateUndoStack(op) {
+      if(undoManager) {
+        undoManager.onOperationExecuted(op)
+      }
+    }
+    function forwardUndoStackChange(e) {
+      odtDocument.emit(ops.OdtDocument.signalUndoStackChanged, e)
+    }
+    function undo() {
+      if(undoManager) {
+        undoManager.moveBackward(1);
+        maintainCursorSelection();
+        return true
+      }
+      return false
+    }
+    function redo() {
+      if(undoManager) {
+        undoManager.moveForward(1);
+        maintainCursorSelection();
+        return true
+      }
+      return false
+    }
+    function formatTextSelection(propertyName, propertyValue) {
+      var selection = odtDocument.getCursorSelection(inputMemberId), op = new ops.OpApplyDirectStyling, properties = {};
+      properties[propertyName] = propertyValue;
+      op.init({memberid:inputMemberId, position:selection.position, length:selection.length, setProperties:{"style:text-properties":properties}});
+      session.enqueue(op)
+    }
+    function toggleBold() {
+      var range = odtDocument.getCursor(inputMemberId).getSelectedRange(), value = styleHelper.isBold(range) ? "normal" : "bold";
+      formatTextSelection("fo:font-weight", value);
+      return true
+    }
+    function toggleItalic() {
+      var range = odtDocument.getCursor(inputMemberId).getSelectedRange(), value = styleHelper.isItalic(range) ? "normal" : "italic";
+      formatTextSelection("fo:font-style", value);
+      return true
+    }
+    function toggleUnderline() {
+      var range = odtDocument.getCursor(inputMemberId).getSelectedRange(), value = styleHelper.hasUnderline(range) ? "none" : "solid";
+      formatTextSelection("style:text-underline-style", value);
+      return true
+    }
+    this.startEditing = function() {
+      var canvasElement, op;
+      canvasElement = odtDocument.getOdfCanvas().getElement();
+      listenEvent(canvasElement, "keydown", keyDownHandler.handleEvent);
+      listenEvent(canvasElement, "keypress", keyPressHandler.handleEvent);
+      listenEvent(canvasElement, "keyup", dummyHandler);
+      listenEvent(canvasElement, "beforecut", handleBeforeCut, true);
+      listenEvent(canvasElement, "cut", handleCut);
+      listenEvent(canvasElement, "copy", handleCopy);
+      listenEvent(canvasElement, "beforepaste", handleBeforePaste, true);
+      listenEvent(canvasElement, "paste", handlePaste);
+      listenEvent(window, "mouseup", clickHandler.handleMouseUp);
+      listenEvent(canvasElement, "contextmenu", handleContextMenu);
+      odtDocument.subscribe(ops.OdtDocument.signalOperationExecuted, maintainCursorSelection);
+      odtDocument.subscribe(ops.OdtDocument.signalOperationExecuted, updateUndoStack);
+      op = new ops.OpAddCursor;
+      op.init({memberid:inputMemberId});
+      session.enqueue(op);
+      if(undoManager) {
+        undoManager.saveInitialState()
+      }
+    };
+    this.endEditing = function() {
+      var canvasElement, op;
+      odtDocument.unsubscribe(ops.OdtDocument.signalOperationExecuted, updateUndoStack);
+      odtDocument.unsubscribe(ops.OdtDocument.signalOperationExecuted, maintainCursorSelection);
+      canvasElement = odtDocument.getOdfCanvas().getElement();
+      removeEvent(canvasElement, "keydown", keyDownHandler.handleEvent);
+      removeEvent(canvasElement, "keypress", keyPressHandler.handleEvent);
+      removeEvent(canvasElement, "keyup", dummyHandler);
+      removeEvent(canvasElement, "cut", handleCut);
+      removeEvent(canvasElement, "beforecut", handleBeforeCut);
+      removeEvent(canvasElement, "copy", handleCopy);
+      removeEvent(canvasElement, "paste", handlePaste);
+      removeEvent(canvasElement, "beforepaste", handleBeforePaste);
+      removeEvent(window, "mouseup", clickHandler.handleMouseUp);
+      removeEvent(canvasElement, "contextmenu", handleContextMenu);
+      op = new ops.OpRemoveCursor;
+      op.init({memberid:inputMemberId});
+      session.enqueue(op);
+      if(undoManager) {
+        undoManager.resetInitialState()
+      }
+    };
+    this.getInputMemberId = function() {
+      return inputMemberId
+    };
+    this.getSession = function() {
+      return session
+    };
+    this.setUndoManager = function(manager) {
+      if(undoManager) {
+        undoManager.unsubscribe(gui.UndoManager.signalUndoStackChanged, forwardUndoStackChange)
+      }
+      undoManager = manager;
+      if(undoManager) {
+        undoManager.setOdtDocument(odtDocument);
+        undoManager.setPlaybackFunction(function(op) {
+          op.execute(odtDocument)
+        });
+        undoManager.subscribe(gui.UndoManager.signalUndoStackChanged, forwardUndoStackChange)
+      }
+    };
+    this.getUndoManager = function() {
+      return undoManager
+    };
+    function init() {
+      var isMacOS = window.navigator.appVersion.toLowerCase().indexOf("mac") !== -1, modifier = gui.KeyboardHandler.Modifier, keyCode = gui.KeyboardHandler.KeyCode;
+      keyDownHandler.bind(keyCode.Tab, modifier.None, function() {
+        insertText("\t");
+        return true
+      });
+      keyDownHandler.bind(keyCode.Left, modifier.None, moveCursorToLeft);
+      keyDownHandler.bind(keyCode.Right, modifier.None, moveCursorToRight);
+      keyDownHandler.bind(keyCode.Up, modifier.None, moveCursorUp);
+      keyDownHandler.bind(keyCode.Down, modifier.None, moveCursorDown);
+      keyDownHandler.bind(keyCode.Backspace, modifier.None, removeTextByBackspaceKey);
+      keyDownHandler.bind(keyCode.Delete, modifier.None, removeTextByDeleteKey);
+      keyDownHandler.bind(keyCode.Left, modifier.Shift, extendSelectionToLeft);
+      keyDownHandler.bind(keyCode.Right, modifier.Shift, extendSelectionToRight);
+      keyDownHandler.bind(keyCode.Up, modifier.Shift, extendSelectionUp);
+      keyDownHandler.bind(keyCode.Down, modifier.Shift, extendSelectionDown);
+      keyDownHandler.bind(keyCode.Home, modifier.None, moveCursorToLineStart);
+      keyDownHandler.bind(keyCode.End, modifier.None, moveCursorToLineEnd);
+      keyDownHandler.bind(keyCode.Home, modifier.Ctrl, moveCursorToDocumentStart);
+      keyDownHandler.bind(keyCode.End, modifier.Ctrl, moveCursorToDocumentEnd);
+      keyDownHandler.bind(keyCode.Home, modifier.Shift, extendSelectionToLineStart);
+      keyDownHandler.bind(keyCode.End, modifier.Shift, extendSelectionToLineEnd);
+      keyDownHandler.bind(keyCode.Up, modifier.CtrlShift, extendSelectionToParagraphStart);
+      keyDownHandler.bind(keyCode.Down, modifier.CtrlShift, extendSelectionToParagraphEnd);
+      keyDownHandler.bind(keyCode.Home, modifier.CtrlShift, extendSelectionToDocumentStart);
+      keyDownHandler.bind(keyCode.End, modifier.CtrlShift, extendSelectionToDocumentEnd);
+      if(isMacOS) {
+        keyDownHandler.bind(keyCode.Clear, modifier.None, removeTextByClearKey);
+        keyDownHandler.bind(keyCode.Left, modifier.Meta, moveCursorToLineStart);
+        keyDownHandler.bind(keyCode.Right, modifier.Meta, moveCursorToLineEnd);
+        keyDownHandler.bind(keyCode.Home, modifier.Meta, moveCursorToDocumentStart);
+        keyDownHandler.bind(keyCode.End, modifier.Meta, moveCursorToDocumentEnd);
+        keyDownHandler.bind(keyCode.Left, modifier.MetaShift, extendSelectionToLineStart);
+        keyDownHandler.bind(keyCode.Right, modifier.MetaShift, extendSelectionToLineEnd);
+        keyDownHandler.bind(keyCode.Up, modifier.AltShift, extendSelectionToParagraphStart);
+        keyDownHandler.bind(keyCode.Down, modifier.AltShift, extendSelectionToParagraphEnd);
+        keyDownHandler.bind(keyCode.Up, modifier.MetaShift, extendSelectionToDocumentStart);
+        keyDownHandler.bind(keyCode.Down, modifier.MetaShift, extendSelectionToDocumentEnd);
+        keyDownHandler.bind(keyCode.A, modifier.Meta, extendSelectionToEntireDocument);
+        keyDownHandler.bind(keyCode.B, modifier.Meta, toggleBold);
+        keyDownHandler.bind(keyCode.I, modifier.Meta, toggleItalic);
+        keyDownHandler.bind(keyCode.U, modifier.Meta, toggleUnderline);
+        keyDownHandler.bind(keyCode.Z, modifier.Meta, undo);
+        keyDownHandler.bind(keyCode.Z, modifier.MetaShift, redo)
+      }else {
+        keyDownHandler.bind(keyCode.A, modifier.Ctrl, extendSelectionToEntireDocument);
+        keyDownHandler.bind(keyCode.B, modifier.Ctrl, toggleBold);
+        keyDownHandler.bind(keyCode.I, modifier.Ctrl, toggleItalic);
+        keyDownHandler.bind(keyCode.U, modifier.Ctrl, toggleUnderline);
+        keyDownHandler.bind(keyCode.Z, modifier.Ctrl, undo);
+        keyDownHandler.bind(keyCode.Z, modifier.CtrlShift, redo)
+      }
+      keyPressHandler.setDefault(function(e) {
+        var text = stringFromKeyPress(e);
+        if(text && !(e.altKey || e.ctrlKey || e.metaKey)) {
+          insertText(text);
+          return true
+        }
+        return false
+      });
+      keyPressHandler.bind(keyCode.Enter, modifier.None, enqueueParagraphSplittingOps);
+      clickHandler.subscribe(gui.ClickHandler.signalSingleClick, selectRange);
+      clickHandler.subscribe(gui.ClickHandler.signalDoubleClick, selectWord);
+      clickHandler.subscribe(gui.ClickHandler.signalTripleClick, selectParagraph)
+    }
+    init()
+  };
+  return gui.SessionController
+}();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.MemberModel = function MemberModel() {
+};
+ops.MemberModel.prototype.getMemberDetailsAndUpdates = function(memberId, subscriber) {
+};
+ops.MemberModel.prototype.unsubscribeMemberDetailsUpdates = function(memberId, subscriber) {
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.TrivialMemberModel = function TrivialMemberModel() {
+  this.getMemberDetailsAndUpdates = function(memberId, subscriber) {
+    subscriber(memberId, null)
+  };
+  this.unsubscribeMemberDetailsUpdates = function(memberId, subscriber) {
+  }
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.NowjsMemberModel = function NowjsMemberModel(server) {
+  var cachedUserData = {}, memberDataSubscribers = {}, nowObject = server.getNowObject();
+  function userIdFromMemberId(memberId) {
+    return memberId.split("___")[0]
+  }
+  function cacheUserDatum(userId, userData) {
+    var subscribers, i;
+    subscribers = memberDataSubscribers[userId];
+    if(subscribers) {
+      cachedUserData[userId] = userData;
+      for(i = 0;i < subscribers.length;i += 1) {
+        subscribers[i].subscriber(subscribers[i].memberId, userData)
+      }
+    }
+  }
+  this.getMemberDetailsAndUpdates = function(memberId, subscriber) {
+    var userId = userIdFromMemberId(memberId), userData = cachedUserData[userId], subscribers = memberDataSubscribers[userId] || [], i;
+    memberDataSubscribers[userId] = subscribers;
+    runtime.assert(subscriber !== undefined, "missing callback");
+    for(i = 0;i < subscribers.length;i += 1) {
+      if(subscribers[i].subscriber === subscriber && subscribers[i].memberId === memberId) {
+        break
+      }
+    }
+    if(i < subscribers.length) {
+      runtime.log("double subscription request for " + memberId + " in NowjsMemberModel::getMemberDetailsAndUpdates")
+    }else {
+      subscribers.push({memberId:memberId, subscriber:subscriber});
+      if(subscribers.length === 1) {
+        nowObject.subscribeUserDetailsUpdates(userId)
+      }
+    }
+    if(userData) {
+      subscriber(memberId, userData)
+    }
+  };
+  this.unsubscribeMemberDetailsUpdates = function(memberId, subscriber) {
+    var i, userId = userIdFromMemberId(memberId), subscribers = memberDataSubscribers[userId];
+    runtime.assert(subscriber !== undefined, "missing subscriber parameter or null");
+    runtime.assert(subscribers, "tried to unsubscribe when no one is subscribed ('" + memberId + "')");
+    if(subscribers) {
+      for(i = 0;i < subscribers.length;i += 1) {
+        if(subscribers[i].subscriber === subscriber && subscribers[i].memberId === memberId) {
+          break
+        }
+      }
+      runtime.assert(i < subscribers.length, "tried to unsubscribe when not subscribed for memberId '" + memberId + "'");
+      subscribers.splice(i, 1);
+      if(subscribers.length === 0) {
+        runtime.log("no more subscribers for: " + memberId);
+        delete memberDataSubscribers[userId];
+        delete cachedUserData[userId];
+        nowObject.unsubscribeUserDetailsUpdates(userId)
+      }
+    }
+  };
+  nowObject.updateUserDetails = function(userId, udata) {
+    cacheUserDatum(userId, udata ? {userid:udata.uid, fullname:udata.fullname, imageurl:"/user/" + udata.avatarId + "/avatar.png", color:udata.color} : null)
+  };
+  runtime.assert(nowObject.networkStatus === "ready", "network not ready")
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.PullBoxMemberModel = function PullBoxMemberModel(sessionId, server) {
+  var cachedMemberData = {}, memberDataSubscribers = {}, serverPullingActivated = false, pullingIntervall = 2E4;
+  function cacheMemberDatum(memberData) {
+    var subscribers, i;
+    subscribers = memberDataSubscribers[memberData.memberid];
+    if(subscribers) {
+      cachedMemberData[memberData.memberid] = memberData;
+      for(i = 0;i < subscribers.length;i += 1) {
+        subscribers[i](memberData.memberid, memberData)
+      }
+    }
+  }
+  function pullMemberData() {
+    var i, memberIds = Object.keys(memberDataSubscribers);
+    runtime.log("member-list request for : " + memberIds.join(","));
+    server.call({command:"query_memberdata_list", args:{es_id:sessionId, member_ids:memberIds}}, function(responseData) {
+      var response = (runtime.fromJson(responseData)), memberDataList, newMemberData, oldMemberData;
+      runtime.log("member-list reply: " + responseData);
+      if(response.hasOwnProperty("memberdata_list")) {
+        memberDataList = response.memberdata_list;
+        for(i = 0;i < memberDataList.length;i += 1) {
+          newMemberData = {memberid:memberDataList[i].member_id, fullname:memberDataList[i].display_name, imageurl:memberDataList[i].avatar_url, color:memberDataList[i].color};
+          oldMemberData = cachedMemberData.hasOwnProperty(newMemberData.memberid) ? cachedMemberData[newMemberData.memberid] : null;
+          if(!oldMemberData || oldMemberData.fullname !== newMemberData.fullname || oldMemberData.imageurl !== newMemberData.imageurl || oldMemberData.color !== newMemberData.color) {
+            cacheMemberDatum(newMemberData)
+          }
+        }
+      }else {
+        runtime.log("Meh, memberdata list broken: " + responseData)
+      }
+    })
+  }
+  function periodicPullMemberData() {
+    if(!serverPullingActivated) {
+      return
+    }
+    pullMemberData();
+    runtime.setTimeout(periodicPullMemberData, pullingIntervall)
+  }
+  function activatePeriodicMemberDataPulling() {
+    if(serverPullingActivated) {
+      return
+    }
+    serverPullingActivated = true;
+    runtime.setTimeout(periodicPullMemberData, pullingIntervall)
+  }
+  function deactivatePeriodicMemberDataPulling() {
+    var key;
+    if(!serverPullingActivated) {
+      return
+    }
+    for(key in memberDataSubscribers) {
+      if(memberDataSubscribers.hasOwnProperty(key)) {
+        return
+      }
+    }
+    serverPullingActivated = false
+  }
+  this.getMemberDetailsAndUpdates = function(memberId, subscriber) {
+    var memberData = cachedMemberData[memberId], subscribers = memberDataSubscribers[memberId] || [], i;
+    memberDataSubscribers[memberId] = subscribers;
+    runtime.assert(subscriber !== undefined, "missing callback");
+    for(i = 0;i < subscribers.length;i += 1) {
+      if(subscribers[i] === subscriber) {
+        break
+      }
+    }
+    if(i < subscribers.length) {
+      runtime.log("double subscription request for " + memberId + " in PullBoxMemberModel::getMemberDetailsAndUpdates")
+    }else {
+      subscribers.push(subscriber);
+      if(subscribers.length === 1) {
+        pullMemberData()
+      }
+    }
+    if(memberData) {
+      subscriber(memberId, memberData)
+    }
+    activatePeriodicMemberDataPulling()
+  };
+  this.unsubscribeMemberDetailsUpdates = function(memberId, subscriber) {
+    var i, subscribers = memberDataSubscribers[memberId];
+    runtime.assert(subscriber !== undefined, "missing subscriber parameter or null");
+    runtime.assert(subscribers, "tried to unsubscribe when no one is subscribed ('" + memberId + "')");
+    if(subscribers) {
+      for(i = 0;i < subscribers.length;i += 1) {
+        if(subscribers[i] === subscriber) {
+          break
+        }
+      }
+      runtime.assert(i < subscribers.length, "tried to unsubscribe when not subscribed for memberId '" + memberId + "'");
+      subscribers.splice(i, 1);
+      if(subscribers.length === 0) {
+        runtime.log("no more subscribers for: " + memberId);
+        delete memberDataSubscribers[memberId];
+        delete cachedMemberData[memberId];
+        deactivatePeriodicMemberDataPulling()
+      }
+    }
+  };
+  runtime.assert(server.networkStatus() === "ready", "network not ready")
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.OperationRouter = function OperationRouter() {
+};
+ops.OperationRouter.prototype.setOperationFactory = function(f) {
+};
+ops.OperationRouter.prototype.setPlaybackFunction = function(playback_func) {
+};
+ops.OperationRouter.prototype.push = function(op) {
+};
+/*
+
+ Copyright (C) 2012 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+ops.TrivialOperationRouter = function TrivialOperationRouter() {
+  var operationFactory, playbackFunction;
+  this.setOperationFactory = function(f) {
+    operationFactory = f
+  };
+  this.setPlaybackFunction = function(playback_func) {
+    playbackFunction = playback_func
+  };
+  this.push = function(op) {
+    var timedOp, opspec = op.spec();
+    opspec.timestamp = (new Date).getTime();
+    timedOp = operationFactory.create(opspec);
+    playbackFunction(timedOp)
+  }
+};
+ops.NowjsOperationRouter = function NowjsOperationRouter(sessionId, memberid, server) {
+  var operationFactory, playbackFunction, nowObject = server.getNowObject(), last_server_seq = -1, reorder_queue = {}, sends_since_server_op = 0, router_sequence = 1E3;
+  function nextNonce() {
+    runtime.assert(memberid !== null, "Router sequence N/A without memberid");
+    router_sequence += 1;
+    return"C:" + memberid + ":" + router_sequence
+  }
+  this.setOperationFactory = function(f) {
+    operationFactory = f
+  };
+  this.setPlaybackFunction = function(playback_func) {
+    playbackFunction = playback_func
+  };
+  function receiveOpFromNetwork(opspec) {
+    var idx, seq, op = operationFactory.create(opspec);
+    runtime.log(" op in: " + runtime.toJson(opspec));
+    if(op !== null) {
+      seq = Number(opspec.server_seq);
+      runtime.assert(!isNaN(seq), "server seq is not a number");
+      if(seq === last_server_seq + 1) {
+        playbackFunction(op);
+        last_server_seq = seq;
+        sends_since_server_op = 0;
+        for(idx = last_server_seq + 1;reorder_queue.hasOwnProperty(idx);idx += 1) {
+          playbackFunction(reorder_queue[idx]);
+          delete reorder_queue[idx];
+          runtime.log("op with server seq " + seq + " taken from hold (reordered)")
+        }
+      }else {
+        runtime.assert(seq !== last_server_seq + 1, "received incorrect order from server");
+        runtime.assert(!reorder_queue.hasOwnProperty(seq), "reorder_queue has incoming op");
+        runtime.log("op with server seq " + seq + " put on hold");
+        reorder_queue[seq] = op
+      }
+    }else {
+      runtime.log("ignoring invalid incoming opspec: " + opspec)
+    }
+  }
+  nowObject.ping = function(pong) {
+    if(memberid !== null) {
+      pong(memberid)
+    }
+  };
+  nowObject.receiveOp = function(op_session_id, opspec) {
+    if(op_session_id === sessionId) {
+      receiveOpFromNetwork(opspec)
+    }
+  };
+  this.push = function(op) {
+    var opspec = op.spec();
+    opspec.client_nonce = nextNonce();
+    opspec.parent_op = last_server_seq + "+" + sends_since_server_op;
+    sends_since_server_op += 1;
+    runtime.log("op out: " + runtime.toJson(opspec));
+    nowObject.deliverOp(sessionId, opspec)
+  };
+  this.requestReplay = function(done_cb) {
+    nowObject.requestReplay(sessionId, function(opspec) {
+      runtime.log("replaying: " + runtime.toJson(opspec));
+      receiveOpFromNetwork(opspec)
+    }, function(count) {
+      runtime.log("replay done (" + count + " ops).");
+      if(done_cb) {
+        done_cb()
+      }
+    })
+  }
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("ops.OperationTransformer");
+ops.PullBoxOperationRouter = function PullBoxOperationRouter(sessionId, memberId, server) {
+  var operationFactory, singleTimeCallbackOnCompleteServerOpSpecsPlay, playbackFunction, pullingTimeOutFlag = null, triggerPushingOpsActivated = false, playUnplayedServerOpSpecsTriggered = false, syncLock = false, hasUnresolvableConflict = false, lastServerSeq = "", unsyncedClientOpspecQueue = [], unplayedServerOpspecQueue = [], operationTransformer = new ops.OperationTransformer, replayTime = 500, pushingIntervall = 3E3, pullingIntervall = 8E3;
+  function compressOpSpecs(opspecs) {
+    var i, j, op, result = [];
+    i = 0;
+    while(i < opspecs.length) {
+      op = operationFactory.create(opspecs[i]);
+      if(op !== null && op.merge) {
+        for(j = i + 1;j < opspecs.length;j += 1) {
+          if(!op.merge(opspecs[j])) {
+            break
+          }
+          runtime.log("Merged: " + opspecs[i].optype + " with " + opspecs[j].optype)
+        }
+        result.push(op.spec());
+        i = j
+      }else {
+        result.push(opspecs[i]);
+        i += 1
+      }
+    }
+    runtime.log("Merged: from " + opspecs.length + " to " + result.length + " specs");
+    return result
+  }
+  function playUnplayedServerOpSpecs() {
+    function doPlayUnplayedServerOpSpecs() {
+      var opspec, op, startTime;
+      playUnplayedServerOpSpecsTriggered = false;
+      startTime = (new Date).getTime();
+      while(unplayedServerOpspecQueue.length > 0) {
+        if((new Date).getTime() - startTime > replayTime) {
+          break
+        }
+        opspec = unplayedServerOpspecQueue.shift();
+        op = operationFactory.create(opspec);
+        runtime.log(" op in: " + runtime.toJson(opspec));
+        if(op !== null) {
+          playbackFunction(op)
+        }else {
+          runtime.log("ignoring invalid incoming opspec: " + opspec)
+        }
+      }
+      if(unplayedServerOpspecQueue.length > 0) {
+        playUnplayedServerOpSpecsTriggered = true;
+        runtime.getWindow().setTimeout(doPlayUnplayedServerOpSpecs, 1)
+      }else {
+        if(singleTimeCallbackOnCompleteServerOpSpecsPlay) {
+          singleTimeCallbackOnCompleteServerOpSpecsPlay();
+          singleTimeCallbackOnCompleteServerOpSpecsPlay = null
+        }
+      }
+    }
+    if(playUnplayedServerOpSpecsTriggered) {
+      return
+    }
+    doPlayUnplayedServerOpSpecs()
+  }
+  function receiveOpSpecsFromNetwork(opspecs) {
+    unplayedServerOpspecQueue = unplayedServerOpspecQueue.concat(opspecs)
+  }
+  function handleOpsSyncConflict(serverOpspecs) {
+    var i, transformResult;
+    if(!serverOpspecs) {
+      runtime.assert(false, "no opspecs received!");
+      return false
+    }
+    transformResult = operationTransformer.transform(unsyncedClientOpspecQueue, (serverOpspecs));
+    if(!transformResult) {
+      return false
+    }
+    for(i = 0;i < transformResult.opsB.length;i += 1) {
+      unplayedServerOpspecQueue.push(transformResult.opsB[i].spec())
+    }
+    unsyncedClientOpspecQueue = [];
+    for(i = 0;i < transformResult.opsA.length;i += 1) {
+      unsyncedClientOpspecQueue.push(transformResult.opsA[i].spec())
+    }
+    return true
+  }
+  function syncOps() {
+    function triggerPullingOps() {
+      var flag = {active:true};
+      pullingTimeOutFlag = flag;
+      runtime.getWindow().setTimeout(function() {
+        runtime.log("Pulling activated:" + flag.active);
+        pullingTimeOutFlag = null;
+        if(flag.active) {
+          syncOps()
+        }
+      }, pullingIntervall)
+    }
+    function doSyncOps() {
+      var syncedClientOpspecs;
+      if(syncLock || hasUnresolvableConflict) {
+        return
+      }
+      syncLock = true;
+      syncedClientOpspecs = unsyncedClientOpspecQueue;
+      unsyncedClientOpspecQueue = [];
+      server.call({command:"sync_ops", args:{es_id:sessionId, member_id:memberId, seq_head:String(lastServerSeq), client_ops:syncedClientOpspecs}}, function(responseData) {
+        var shouldRetryInstantly = false, response = (runtime.fromJson(responseData));
+        runtime.log("sync-ops reply: " + responseData);
+        if(response.result === "new_ops") {
+          if(response.ops.length > 0) {
+            if(unsyncedClientOpspecQueue.length === 0) {
+              receiveOpSpecsFromNetwork(compressOpSpecs(response.ops))
+            }else {
+              runtime.log("meh, have new ops locally meanwhile, have to do transformations.");
+              hasUnresolvableConflict = !handleOpsSyncConflict(compressOpSpecs(response.ops))
+            }
+            lastServerSeq = response.head_seq
+          }
+        }else {
+          if(response.result === "added") {
+            runtime.log("All added to server");
+            lastServerSeq = response.head_seq
+          }else {
+            if(response.result === "conflict") {
+              unsyncedClientOpspecQueue = syncedClientOpspecs.concat(unsyncedClientOpspecQueue);
+              runtime.log("meh, server has new ops meanwhile, have to do transformations.");
+              hasUnresolvableConflict = !handleOpsSyncConflict(compressOpSpecs(response.ops));
+              lastServerSeq = response.head_seq;
+              if(!hasUnresolvableConflict) {
+                shouldRetryInstantly = true
+              }
+            }else {
+              runtime.assert(false, "Unexpected result on sync-ops call: " + response.result)
+            }
+          }
+        }
+        syncLock = false;
+        if(hasUnresolvableConflict) {
+          runtime.assert(false, "Sorry to tell:\n" + "we hit a pair of operations in a state which yet need to be supported for transformation against each other.\n" + "Client disconnected from session, no further editing accepted.\n\n" + "Please reconnect manually for now.")
+        }else {
+          if(shouldRetryInstantly) {
+            doSyncOps()
+          }else {
+            runtime.log("Preparing next: " + (unsyncedClientOpspecQueue.length === 0));
+            if(unsyncedClientOpspecQueue.length === 0) {
+              triggerPullingOps()
+            }
+          }
+          playUnplayedServerOpSpecs()
+        }
+      })
+    }
+    doSyncOps()
+  }
+  function triggerPushingOps() {
+    if(syncLock || triggerPushingOpsActivated) {
+      return
+    }
+    triggerPushingOpsActivated = true;
+    if(pullingTimeOutFlag) {
+      pullingTimeOutFlag.active = false
+    }
+    runtime.getWindow().setTimeout(function() {
+      runtime.log("Pushing activated");
+      triggerPushingOpsActivated = false;
+      syncOps()
+    }, pushingIntervall)
+  }
+  this.requestReplay = function(done_cb) {
+    singleTimeCallbackOnCompleteServerOpSpecsPlay = done_cb;
+    syncOps()
+  };
+  this.setOperationFactory = function(f) {
+    operationFactory = f;
+    operationTransformer.setOperationFactory(f)
+  };
+  this.setPlaybackFunction = function(playback_func) {
+    playbackFunction = playback_func
+  };
+  this.push = function(op) {
+    var timedOp, opspec = op.spec();
+    if(hasUnresolvableConflict) {
+      return
+    }
+    if(unplayedServerOpspecQueue.length > 0) {
+      return
+    }
+    opspec.timestamp = (new Date).getTime();
+    timedOp = operationFactory.create(opspec);
+    playbackFunction(timedOp);
+    unsyncedClientOpspecQueue.push(opspec);
+    triggerPushingOps()
+  }
+};
+gui.EditInfoHandle = function EditInfoHandle(parentElement) {
+  var edits = [], handle, document = (parentElement.ownerDocument), htmlns = document.documentElement.namespaceURI, editinfons = "urn:webodf:names:editinfo";
+  function renderEdits() {
+    var i, infoDiv, colorSpan, authorSpan, timeSpan;
+    handle.innerHTML = "";
+    for(i = 0;i < edits.length;i += 1) {
+      infoDiv = document.createElementNS(htmlns, "div");
+      infoDiv.className = "editInfo";
+      colorSpan = document.createElementNS(htmlns, "span");
+      colorSpan.className = "editInfoColor";
+      colorSpan.setAttributeNS(editinfons, "editinfo:memberid", edits[i].memberid);
+      authorSpan = document.createElementNS(htmlns, "span");
+      authorSpan.className = "editInfoAuthor";
+      authorSpan.setAttributeNS(editinfons, "editinfo:memberid", edits[i].memberid);
+      timeSpan = document.createElementNS(htmlns, "span");
+      timeSpan.className = "editInfoTime";
+      timeSpan.setAttributeNS(editinfons, "editinfo:memberid", edits[i].memberid);
+      timeSpan.innerHTML = edits[i].time;
+      infoDiv.appendChild(colorSpan);
+      infoDiv.appendChild(authorSpan);
+      infoDiv.appendChild(timeSpan);
+      handle.appendChild(infoDiv)
+    }
+  }
+  this.setEdits = function(editArray) {
+    edits = editArray;
+    renderEdits()
+  };
+  this.show = function() {
+    handle.style.display = "block"
+  };
+  this.hide = function() {
+    handle.style.display = "none"
+  };
+  function init() {
+    handle = document.createElementNS(htmlns, "div");
+    handle.setAttribute("class", "editInfoHandle");
+    handle.style.display = "none";
+    parentElement.appendChild(handle)
+  }
+  init()
+};
+runtime.loadClass("ops.EditInfo");
+runtime.loadClass("gui.EditInfoHandle");
+gui.EditInfoMarker = function EditInfoMarker(editInfo, initialVisibility) {
+  var self = this, editInfoNode, handle, marker, editinfons = "urn:webodf:names:editinfo", decay1, decay2, decayTimeStep = 1E4;
+  function applyDecay(opacity, delay) {
+    return runtime.getWindow().setTimeout(function() {
+      marker.style.opacity = opacity
+    }, delay)
+  }
+  function deleteDecay(timer) {
+    runtime.getWindow().clearTimeout(timer)
+  }
+  function setLastAuthor(memberid) {
+    marker.setAttributeNS(editinfons, "editinfo:memberid", memberid)
+  }
+  this.addEdit = function(memberid, timestamp) {
+    var age = Date.now() - timestamp;
+    editInfo.addEdit(memberid, timestamp);
+    handle.setEdits(editInfo.getSortedEdits());
+    setLastAuthor(memberid);
+    if(decay1) {
+      deleteDecay(decay1)
+    }
+    if(decay2) {
+      deleteDecay(decay2)
+    }
+    if(age < decayTimeStep) {
+      applyDecay(1, 0);
+      decay1 = applyDecay(0.5, decayTimeStep - age);
+      decay2 = applyDecay(0.2, decayTimeStep * 2 - age)
+    }else {
+      if(age >= decayTimeStep && age < decayTimeStep * 2) {
+        applyDecay(0.5, 0);
+        decay2 = applyDecay(0.2, decayTimeStep * 2 - age)
+      }else {
+        applyDecay(0.2, 0)
+      }
+    }
+  };
+  this.getEdits = function() {
+    return editInfo.getEdits()
+  };
+  this.clearEdits = function() {
+    editInfo.clearEdits();
+    handle.setEdits([]);
+    if(marker.hasAttributeNS(editinfons, "editinfo:memberid")) {
+      marker.removeAttributeNS(editinfons, "editinfo:memberid")
+    }
+  };
+  this.getEditInfo = function() {
+    return editInfo
+  };
+  this.show = function() {
+    marker.style.display = "block"
+  };
+  this.hide = function() {
+    self.hideHandle();
+    marker.style.display = "none"
+  };
+  this.showHandle = function() {
+    handle.show()
+  };
+  this.hideHandle = function() {
+    handle.hide()
+  };
+  function init() {
+    var dom = editInfo.getOdtDocument().getDOM(), htmlns = dom.documentElement.namespaceURI;
+    marker = dom.createElementNS(htmlns, "div");
+    marker.setAttribute("class", "editInfoMarker");
+    marker.onmouseover = function() {
+      self.showHandle()
+    };
+    marker.onmouseout = function() {
+      self.hideHandle()
+    };
+    editInfoNode = editInfo.getNode();
+    editInfoNode.appendChild(marker);
+    handle = new gui.EditInfoHandle(editInfoNode);
+    if(!initialVisibility) {
+      self.hide()
+    }
+  }
+  init()
+};
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("gui.Caret");
+runtime.loadClass("ops.TrivialMemberModel");
+runtime.loadClass("ops.EditInfo");
+runtime.loadClass("gui.EditInfoMarker");
+gui.SessionViewOptions = function() {
+  this.editInfoMarkersInitiallyVisible = true;
+  this.caretAvatarsInitiallyVisible = true;
+  this.caretBlinksOnRangeSelect = true
+};
+gui.SessionView = function() {
+  function configOption(userValue, defaultValue) {
+    return userValue !== undefined ? Boolean(userValue) : defaultValue
+  }
+  function SessionView(viewOptions, session, caretManager) {
+    var avatarInfoStyles, editInfons = "urn:webodf:names:editinfo", editInfoMap = {}, showEditInfoMarkers = configOption(viewOptions.editInfoMarkersInitiallyVisible, true), showCaretAvatars = configOption(viewOptions.caretAvatarsInitiallyVisible, true), blinkOnRangeSelect = configOption(viewOptions.caretBlinksOnRangeSelect, true);
+    function createAvatarInfoNodeMatch(nodeName, memberId, pseudoClass) {
+      var userId = memberId.split("___")[0];
+      return nodeName + '[editinfo|memberid^="' + userId + '"]' + pseudoClass
+    }
+    function getAvatarInfoStyle(nodeName, memberId, pseudoClass) {
+      var node = avatarInfoStyles.firstChild, nodeMatch = createAvatarInfoNodeMatch(nodeName, memberId, pseudoClass);
+      while(node) {
+        if(node.nodeType === Node.TEXT_NODE && node.data.indexOf(nodeMatch) === 0) {
+          return node
+        }
+        node = node.nextSibling
+      }
+      return null
+    }
+    function setAvatarInfoStyle(memberId, name, color) {
+      function setStyle(nodeName, rule, pseudoClass) {
+        var styleRule = createAvatarInfoNodeMatch(nodeName, memberId, pseudoClass) + rule, styleNode = getAvatarInfoStyle(nodeName, memberId, pseudoClass);
+        if(styleNode) {
+          styleNode.data = styleRule
+        }else {
+          avatarInfoStyles.appendChild(document.createTextNode(styleRule))
+        }
+      }
+      setStyle("div.editInfoMarker", "{ background-color: " + color + "; }", "");
+      setStyle("span.editInfoColor", "{ background-color: " + color + "; }", "");
+      setStyle("span.editInfoAuthor", '{ content: "' + name + '"; }', ":before");
+      setStyle("dc|creator", '{ content: "' + name + '"; display: none;}', ":before");
+      setStyle("dc|creator", "{ background-color: " + color + "; }", "")
+    }
+    function highlightEdit(element, memberId, timestamp) {
+      var editInfo, editInfoMarker, id = "", editInfoNode = element.getElementsByTagNameNS(editInfons, "editinfo")[0];
+      if(editInfoNode) {
+        id = editInfoNode.getAttributeNS(editInfons, "id");
+        editInfoMarker = editInfoMap[id]
+      }else {
+        id = Math.random().toString();
+        editInfo = new ops.EditInfo(element, session.getOdtDocument());
+        editInfoMarker = new gui.EditInfoMarker(editInfo, showEditInfoMarkers);
+        editInfoNode = element.getElementsByTagNameNS(editInfons, "editinfo")[0];
+        editInfoNode.setAttributeNS(editInfons, "id", id);
+        editInfoMap[id] = editInfoMarker
+      }
+      editInfoMarker.addEdit(memberId, new Date(timestamp))
+    }
+    function setEditInfoMarkerVisbility(visible) {
+      var editInfoMarker, keyname;
+      for(keyname in editInfoMap) {
+        if(editInfoMap.hasOwnProperty(keyname)) {
+          editInfoMarker = editInfoMap[keyname];
+          if(visible) {
+            editInfoMarker.show()
+          }else {
+            editInfoMarker.hide()
+          }
+        }
+      }
+    }
+    function setCaretAvatarVisibility(visible) {
+      caretManager.getCarets().forEach(function(caret) {
+        if(visible) {
+          caret.showHandle()
+        }else {
+          caret.hideHandle()
+        }
+      })
+    }
+    this.showEditInfoMarkers = function() {
+      if(showEditInfoMarkers) {
+        return
+      }
+      showEditInfoMarkers = true;
+      setEditInfoMarkerVisbility(showEditInfoMarkers)
+    };
+    this.hideEditInfoMarkers = function() {
+      if(!showEditInfoMarkers) {
+        return
+      }
+      showEditInfoMarkers = false;
+      setEditInfoMarkerVisbility(showEditInfoMarkers)
+    };
+    this.showCaretAvatars = function() {
+      if(showCaretAvatars) {
+        return
+      }
+      showCaretAvatars = true;
+      setCaretAvatarVisibility(showCaretAvatars)
+    };
+    this.hideCaretAvatars = function() {
+      if(!showCaretAvatars) {
+        return
+      }
+      showCaretAvatars = false;
+      setCaretAvatarVisibility(showCaretAvatars)
+    };
+    this.getSession = function() {
+      return session
+    };
+    this.getCaret = function(memberid) {
+      return caretManager.getCaret(memberid)
+    };
+    function renderMemberData(memberId, memberData) {
+      var caret = caretManager.getCaret(memberId);
+      if(memberData === undefined) {
+        runtime.log('MemberModel sent undefined data for member "' + memberId + '".');
+        return
+      }
+      if(memberData === null) {
+        memberData = {memberid:memberId, fullname:"Unknown Identity", color:"black", imageurl:"avatar-joe.png"}
+      }
+      if(caret) {
+        caret.setAvatarImageUrl(memberData.imageurl);
+        caret.setColor(memberData.color)
+      }
+      setAvatarInfoStyle(memberId, memberData.fullname, memberData.color)
+    }
+    function onCursorAdded(cursor) {
+      var memberId = cursor.getMemberId(), memberModel = session.getMemberModel();
+      caretManager.registerCursor(cursor, showCaretAvatars, blinkOnRangeSelect);
+      renderMemberData(memberId, null);
+      memberModel.getMemberDetailsAndUpdates(memberId, renderMemberData);
+      runtime.log("+++ View here +++ eagerly created an Caret for '" + memberId + "'! +++")
+    }
+    function onCursorRemoved(memberid) {
+      var hasMemberEditInfo = false, keyname;
+      for(keyname in editInfoMap) {
+        if(editInfoMap.hasOwnProperty(keyname) && editInfoMap[keyname].getEditInfo().getEdits().hasOwnProperty(memberid)) {
+          hasMemberEditInfo = true;
+          break
+        }
+      }
+      if(!hasMemberEditInfo) {
+        session.getMemberModel().unsubscribeMemberDetailsUpdates(memberid, renderMemberData)
+      }
+    }
+    function init() {
+      var odtDocument = session.getOdtDocument(), head = document.getElementsByTagName("head")[0];
+      odtDocument.subscribe(ops.OdtDocument.signalCursorAdded, onCursorAdded);
+      odtDocument.subscribe(ops.OdtDocument.signalCursorRemoved, onCursorRemoved);
+      odtDocument.subscribe(ops.OdtDocument.signalParagraphChanged, function(info) {
+        highlightEdit(info.paragraphElement, info.memberId, info.timeStamp)
+      });
+      avatarInfoStyles = document.createElementNS(head.namespaceURI, "style");
+      avatarInfoStyles.type = "text/css";
+      avatarInfoStyles.media = "screen, print, handheld, projection";
+      avatarInfoStyles.appendChild(document.createTextNode("@namespace editinfo url(urn:webodf:names:editinfo);"));
+      avatarInfoStyles.appendChild(document.createTextNode("@namespace dc url(http://purl.org/dc/elements/1.1/);"));
+      head.appendChild(avatarInfoStyles)
+    }
+    init()
+  }
+  return SessionView
+}();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("gui.Caret");
+gui.CaretManager = function CaretManager(sessionController) {
+  var carets = {};
+  function getCaret(memberId) {
+    return carets.hasOwnProperty(memberId) ? carets[memberId] : null
+  }
+  function getCanvasElement() {
+    return sessionController.getSession().getOdtDocument().getOdfCanvas().getElement()
+  }
+  function removeCaret(memberId) {
+    if(memberId === sessionController.getInputMemberId()) {
+      getCanvasElement().removeAttribute("tabindex")
+    }
+    delete carets[memberId]
+  }
+  function refreshLocalCaretBlinking(cursor) {
+    var caret, memberId = cursor.getMemberId();
+    if(memberId === sessionController.getInputMemberId()) {
+      caret = getCaret(memberId);
+      if(caret) {
+        caret.refreshCursorBlinking()
+      }
+    }
+  }
+  function ensureLocalCaretVisible(info) {
+    var caret;
+    if(info.memberId === sessionController.getInputMemberId()) {
+      caret = getCaret(info.memberId);
+      if(caret) {
+        caret.ensureVisible()
+      }
+    }
+  }
+  function focusLocalCaret() {
+    var caret = getCaret(sessionController.getInputMemberId());
+    if(caret) {
+      caret.setFocus()
+    }
+  }
+  function blurLocalCaret() {
+    var caret = getCaret(sessionController.getInputMemberId());
+    if(caret) {
+      caret.removeFocus()
+    }
+  }
+  this.registerCursor = function(cursor, caretAvatarInitiallyVisible, blinkOnRangeSelect) {
+    var memberid = cursor.getMemberId(), canvasElement = getCanvasElement(), caret = new gui.Caret(cursor, caretAvatarInitiallyVisible, blinkOnRangeSelect);
+    carets[memberid] = caret;
+    if(memberid === sessionController.getInputMemberId()) {
+      runtime.log("Starting to track input on new cursor of " + memberid);
+      cursor.handleUpdate = caret.ensureVisible;
+      canvasElement.setAttribute("tabindex", 0);
+      canvasElement.focus()
+    }
+    return caret
+  };
+  this.getCaret = getCaret;
+  this.getCarets = function() {
+    return Object.keys(carets).map(function(memberid) {
+      return carets[memberid]
+    })
+  };
+  function init() {
+    var session = sessionController.getSession(), odtDocument = session.getOdtDocument(), canvasElement = getCanvasElement();
+    odtDocument.subscribe(ops.OdtDocument.signalParagraphChanged, ensureLocalCaretVisible);
+    odtDocument.subscribe(ops.OdtDocument.signalCursorMoved, refreshLocalCaretBlinking);
+    odtDocument.subscribe(ops.OdtDocument.signalCursorRemoved, removeCaret);
+    canvasElement.onfocus = focusLocalCaret;
+    canvasElement.onblur = blurLocalCaret
+  }
+  init()
+};
 runtime.loadClass("xmldom.XPath");
-runtime.loadClass("odf.Style2CSS");
+runtime.loadClass("odf.Namespaces");
 gui.PresenterUI = function() {
-  var s2css = new odf.Style2CSS, xpath = new xmldom.XPath, nsResolver = s2css.namespaceResolver;
+  var xpath = new xmldom.XPath, window = runtime.getWindow();
   return function PresenterUI(odf_element) {
     var self = this;
     self.setInitialSlideMode = function() {
@@ -6682,7 +14047,7 @@ gui.PresenterUI = function() {
     self.slideChange = function(indexChanger) {
       var pages = self.getPages(self.odf_canvas.odfContainer().rootElement), last = -1, i = 0, newidx, pagelist;
       pages.forEach(function(tuple) {
-        var name = tuple[0], node = tuple[1];
+        var node = tuple[1];
         if(node.hasAttribute("slide_current")) {
           last = i;
           node.removeAttribute("slide_current")
@@ -6719,7 +14084,7 @@ gui.PresenterUI = function() {
       window.scrollBy(0, pages[idx][1].getBoundingClientRect().top - 30)
     };
     self.getPages = function(root) {
-      var pagenodes = root.getElementsByTagNameNS(nsResolver("draw"), "page"), pages = [], i;
+      var pagenodes = root.getElementsByTagNameNS(odf.Namespaces.drawns, "page"), pages = [], i;
       for(i = 0;i < pagenodes.length;i += 1) {
         pages.push([pagenodes[i].getAttribute("draw:name"), pagenodes[i]])
       }
@@ -6792,147 +14157,14 @@ gui.PresenterUI = function() {
     document.addEventListener("keydown", self.keyDownHandler, false)
   }
 }();
-gui.Caret = function Caret(selection, rootNode) {
-  var document = rootNode.ownerDocument, cursorns, cursorNode;
-  cursorns = "urn:webodf:names:cursor";
-  cursorNode = document.createElementNS(cursorns, "cursor");
-  this.updateToSelection = function() {
-    var range;
-    if(selection.rangeCount === 1) {
-      range = selection.getRangeAt(0)
-    }
-  }
-};
-runtime.loadClass("core.Cursor");
-gui.SelectionMover = function SelectionMover(selection, pointWalker) {
-  var doc = pointWalker.node().ownerDocument, cursor = new core.Cursor(selection, doc);
-  function getActiveRange(node) {
-    var range;
-    if(selection.rangeCount === 0) {
-      selection.addRange(node.ownerDocument.createRange())
-    }
-    return selection.getRangeAt(selection.rangeCount - 1)
-  }
-  function setStart(node, offset) {
-    var ranges = [], i, range;
-    for(i = 0;i < selection.rangeCount;i += 1) {
-      ranges[i] = selection.getRangeAt(i)
-    }
-    selection.removeAllRanges();
-    if(ranges.length === 0) {
-      ranges[0] = node.ownerDocument.createRange()
-    }
-    ranges[ranges.length - 1].setStart(pointWalker.node(), pointWalker.position());
-    for(i = 0;i < ranges.length;i += 1) {
-      selection.addRange(ranges[i])
-    }
-  }
-  function doMove(extend, move) {
-    if(selection.rangeCount === 0) {
-      return
-    }
-    var range = selection.getRangeAt(0), element;
-    if(!range.startContainer || range.startContainer.nodeType !== 1) {
-      return
-    }
-    element = range.startContainer;
-    pointWalker.setPoint(element, range.startOffset);
-    move();
-    setStart(pointWalker.node(), pointWalker.position())
-  }
-  function doMoveForward(extend, move) {
-    if(selection.rangeCount === 0) {
-      return
-    }
-    move();
-    var range = selection.getRangeAt(0), element;
-    if(!range.startContainer || range.startContainer.nodeType !== 1) {
-      return
-    }
-    element = range.startContainer;
-    pointWalker.setPoint(element, range.startOffset)
-  }
-  function moveCursor(node, offset, selectMode) {
-    if(selectMode) {
-      selection.extend(node, offset)
-    }else {
-      selection.collapse(node, offset)
-    }
-    cursor.updateToSelection()
-  }
-  function moveCursorLeft() {
-    var element;
-    if(!selection.focusNode || selection.focusNode.nodeType !== 1) {
-      return
-    }
-    element = selection.focusNode;
-    pointWalker.setPoint(element, selection.focusOffset);
-    pointWalker.stepBackward();
-    moveCursor(pointWalker.node(), pointWalker.position(), false)
-  }
-  function moveCursorRight() {
-    cursor.remove();
-    var element;
-    if(!selection.focusNode || selection.focusNode.nodeType !== 1) {
-      return
-    }
-    element = selection.focusNode;
-    pointWalker.setPoint(element, selection.focusOffset);
-    pointWalker.stepForward();
-    moveCursor(pointWalker.node(), pointWalker.position(), false)
-  }
-  function moveCursorUp() {
-    var rect = cursor.getNode().getBoundingClientRect(), x = rect.left, y = rect.top, arrived = false, left = 200;
-    while(!arrived && left) {
-      left -= 1;
-      moveCursorLeft();
-      rect = cursor.getNode().getBoundingClientRect();
-      arrived = rect.top !== y && rect.left < x
-    }
-  }
-  function moveCursorDown() {
-    cursor.updateToSelection();
-    var rect = cursor.getNode().getBoundingClientRect(), x = rect.left, y = rect.top, arrived = false, left = 200;
-    while(!arrived) {
-      left -= 1;
-      moveCursorRight();
-      rect = cursor.getNode().getBoundingClientRect();
-      arrived = rect.top !== y && rect.left > x
-    }
-  }
-  this.movePointForward = function(extend) {
-    doMove(extend, pointWalker.stepForward)
-  };
-  this.movePointBackward = function(extend) {
-    doMove(extend, pointWalker.stepBackward)
-  };
-  this.moveLineForward = function(extend) {
-    if(selection.modify) {
-      selection.modify(extend ? "extend" : "move", "forward", "line")
-    }else {
-      doMove(extend, moveCursorDown)
-    }
-  };
-  this.moveLineBackward = function(extend) {
-    if(selection.modify) {
-      selection.modify(extend ? "extend" : "move", "backward", "line")
-    }else {
-      doMove(extend, function() {
-      })
-    }
-  };
-  return this
-};
-runtime.loadClass("core.PointWalker");
+runtime.loadClass("core.PositionIterator");
 runtime.loadClass("core.Cursor");
 gui.XMLEdit = function XMLEdit(element, stylesheet) {
-  var simplecss, cssprefix, documentElement, customNS = "customns", walker = null;
+  var simplecss, cssprefix, documentElement, walker = null;
   if(!element.id) {
     element.id = "xml" + String(Math.random()).substring(2)
   }
   cssprefix = "#" + element.id + " ";
-  function installHandlers() {
-  }
   simplecss = cssprefix + "*," + cssprefix + ":visited, " + cssprefix + ":link {display:block; margin: 0px; margin-left: 10px; font-size: medium; color: black; background: white; font-variant: normal; font-weight: normal; font-style: normal; font-family: sans-serif; text-decoration: none; white-space: pre-wrap; height: auto; width: auto}\n" + cssprefix + ":before {color: blue; content: '<' attr(customns_name) attr(customns_atts) '>';}\n" + cssprefix + ":after {color: blue; content: '</' attr(customns_name) '>';}\n" + 
   cssprefix + "{overflow: auto;}\n";
   function listenEvent(eventTarget, eventType, eventHandler) {
@@ -7003,16 +14235,12 @@ gui.XMLEdit = function XMLEdit(element, stylesheet) {
     }
     cancelEvent(event)
   }
-  function handleKeyPress(event) {
-  }
   function handleClick(event) {
-    var sel = element.ownerDocument.defaultView.getSelection(), r = sel.getRangeAt(0), n = r.startContainer;
     cancelEvent(event)
   }
   function initElement(element) {
     listenEvent(element, "click", handleClick);
     listenEvent(element, "keydown", handleKeyDown);
-    listenEvent(element, "keypress", handleKeyPress);
     listenEvent(element, "drop", cancelEvent);
     listenEvent(element, "dragend", cancelEvent);
     listenEvent(element, "beforepaste", cancelEvent);
@@ -7023,7 +14251,7 @@ gui.XMLEdit = function XMLEdit(element, stylesheet) {
     while(n && n !== node) {
       p = n;
       n = n.nextSibling || n.parentNode;
-      if(p.nodeType === 3 && re.test(p.nodeValue)) {
+      if(p.nodeType === Node.TEXT_NODE && re.test(p.nodeValue)) {
         p.parentNode.removeChild(p)
       }
     }
@@ -7042,7 +14270,7 @@ gui.XMLEdit = function XMLEdit(element, stylesheet) {
   function addExplicitAttributes(node) {
     var n = node.firstChild;
     while(n && n !== node) {
-      if(n.nodeType === 1) {
+      if(n.nodeType === Node.ELEMENT_NODE) {
         addExplicitAttributes(n)
       }
       n = n.nextSibling || n.parentNode
@@ -7053,7 +14281,7 @@ gui.XMLEdit = function XMLEdit(element, stylesheet) {
   function getNamespacePrefixes(node, prefixes) {
     var n = node.firstChild, atts, att, i;
     while(n && n !== node) {
-      if(n.nodeType === 1) {
+      if(n.nodeType === Node.ELEMENT_NODE) {
         getNamespacePrefixes(n, prefixes);
         atts = n.attributes;
         for(i = atts.length - 1;i >= 0;i -= 1) {
@@ -7085,7 +14313,7 @@ gui.XMLEdit = function XMLEdit(element, stylesheet) {
     }
   }
   function createCssFromXmlInstance(node) {
-    var prefixes = {}, css = "@namespace customns url(customns);\n", name, pre, ns, names, csssel;
+    var prefixes = {}, css = "@namespace customns url(customns);\n";
     getNamespacePrefixes(node, prefixes);
     generateUniquePrefixes(prefixes);
     return css
@@ -7110,14 +14338,869 @@ gui.XMLEdit = function XMLEdit(element, stylesheet) {
     }
     element.appendChild(node);
     updateCSS();
-    walker = new core.PointWalker(node)
+    walker = new core.PositionIterator(node)
   }
   initElement(element);
   this.updateCSS = updateCSS;
   this.setXML = setXML;
   this.getXML = getXML
 };
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+gui.UndoManager = function UndoManager() {
+};
+gui.UndoManager.prototype.subscribe = function(signal, callback) {
+};
+gui.UndoManager.prototype.unsubscribe = function(signal, callback) {
+};
+gui.UndoManager.prototype.setOdtDocument = function(newDocument) {
+};
+gui.UndoManager.prototype.saveInitialState = function() {
+};
+gui.UndoManager.prototype.resetInitialState = function() {
+};
+gui.UndoManager.prototype.setPlaybackFunction = function(playback_func) {
+};
+gui.UndoManager.prototype.hasUndoStates = function() {
+};
+gui.UndoManager.prototype.hasRedoStates = function() {
+};
+gui.UndoManager.prototype.moveForward = function(states) {
+};
+gui.UndoManager.prototype.moveBackward = function(states) {
+};
+gui.UndoManager.prototype.onOperationExecuted = function(op) {
+};
+gui.UndoManager.signalUndoStackChanged = "undoStackChanged";
+gui.UndoManager.signalUndoStateCreated = "undoStateCreated";
+gui.UndoManager.signalUndoStateModified = "undoStateModified";
 (function() {
-  return["core/Async.js", "core/Base64.js", "core/ByteArray.js", "core/ByteArrayWriter.js", "core/Cursor.js", "core/JSLint.js", "core/PointWalker.js", "core/RawDeflate.js", "core/RawInflate.js", "core/UnitTester.js", "core/Zip.js", "gui/Caret.js", "gui/SelectionMover.js", "gui/XMLEdit.js", "gui/PresenterUI.js", "odf/FontLoader.js", "odf/Formatting.js", "odf/OdfCanvas.js", "odf/OdfContainer.js", "odf/Style2CSS.js", "odf/StyleInfo.js", "xmldom/LSSerializer.js", "xmldom/LSSerializerFilter.js", "xmldom/OperationalTransformDOM.js", 
-  "xmldom/OperationalTransformInterface.js", "xmldom/RelaxNG.js", "xmldom/RelaxNG2.js", "xmldom/RelaxNGParser.js", "xmldom/XPath.js"]
+  return gui.UndoManager
 })();
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+gui.UndoStateRules = function UndoStateRules() {
+  function getOpType(op) {
+    return op.spec().optype
+  }
+  this.getOpType = getOpType;
+  function getOpPosition(op) {
+    return op.spec().position
+  }
+  function isEditOperation(op) {
+    switch(getOpType(op)) {
+      case "MoveCursor":
+      ;
+      case "AddCursor":
+      ;
+      case "RemoveCursor":
+        return false;
+      default:
+        return true
+    }
+  }
+  this.isEditOperation = isEditOperation;
+  function canAggregateOperation(optype) {
+    switch(optype) {
+      case "RemoveText":
+      ;
+      case "InsertText":
+        return true;
+      default:
+        return false
+    }
+  }
+  function isSameDirectionOfTravel(recentEditOps, thisOp) {
+    var existing1 = getOpPosition(recentEditOps[recentEditOps.length - 2]), existing2 = getOpPosition(recentEditOps[recentEditOps.length - 1]), thisPos = getOpPosition(thisOp), direction = existing2 - existing1;
+    return existing2 === thisPos - direction
+  }
+  function isContinuousOperation(recentEditOps, thisOp) {
+    var optype = getOpType(thisOp);
+    if(canAggregateOperation(optype) && optype === getOpType(recentEditOps[0])) {
+      if(recentEditOps.length === 1) {
+        return true
+      }
+      if(isSameDirectionOfTravel(recentEditOps, thisOp)) {
+        return true
+      }
+    }
+    return false
+  }
+  function isPartOfOperationSet(operation, lastOperations) {
+    if(isEditOperation(operation)) {
+      if(lastOperations.length === 0) {
+        return true
+      }
+      return isEditOperation(lastOperations[lastOperations.length - 1]) && isContinuousOperation(lastOperations.filter(isEditOperation), operation)
+    }
+    return true
+  }
+  this.isPartOfOperationSet = isPartOfOperationSet
+};
+/*
+
+ Copyright (C) 2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.DomUtils");
+runtime.loadClass("gui.UndoManager");
+runtime.loadClass("gui.UndoStateRules");
+gui.TrivialUndoManager = function TrivialUndoManager(defaultRules) {
+  var self = this, cursorns = "urn:webodf:names:cursor", domUtils = new core.DomUtils, initialDoc, initialState = [], playFunc, odtDocument, currentUndoState = [], undoStates = [], redoStates = [], eventNotifier = new core.EventNotifier([gui.UndoManager.signalUndoStackChanged, gui.UndoManager.signalUndoStateCreated, gui.UndoManager.signalUndoStateModified, gui.TrivialUndoManager.signalDocumentRootReplaced]), undoRules = defaultRules || new gui.UndoStateRules;
+  function emitStackChange() {
+    eventNotifier.emit(gui.UndoManager.signalUndoStackChanged, {undoAvailable:self.hasUndoStates(), redoAvailable:self.hasRedoStates()})
+  }
+  function mostRecentUndoState() {
+    return undoStates[undoStates.length - 1]
+  }
+  function completeCurrentUndoState() {
+    if(currentUndoState !== initialState && currentUndoState !== mostRecentUndoState()) {
+      undoStates.push(currentUndoState)
+    }
+  }
+  function removeNode(node) {
+    var sibling = node.previousSibling || node.nextSibling;
+    node.parentNode.removeChild(node);
+    domUtils.normalizeTextNodes(sibling)
+  }
+  function removeCursors(root) {
+    domUtils.getElementsByTagNameNS(root, cursorns, "cursor").forEach(removeNode);
+    domUtils.getElementsByTagNameNS(root, cursorns, "anchor").forEach(removeNode)
+  }
+  function values(obj) {
+    return Object.keys(obj).map(function(key) {
+      return obj[key]
+    })
+  }
+  function extractCursorStates(undoStates) {
+    var addCursor = {}, moveCursor = {}, requiredAddOps = {}, remainingAddOps, operations = undoStates.pop();
+    odtDocument.getCursors().forEach(function(cursor) {
+      requiredAddOps[cursor.getMemberId()] = true
+    });
+    remainingAddOps = Object.keys(requiredAddOps).length;
+    function processOp(op) {
+      var spec = op.spec();
+      if(!requiredAddOps[spec.memberid]) {
+        return
+      }
+      switch(spec.optype) {
+        case "AddCursor":
+          if(!addCursor[spec.memberid]) {
+            addCursor[spec.memberid] = op;
+            delete requiredAddOps[spec.memberid];
+            remainingAddOps -= 1
+          }
+          break;
+        case "MoveCursor":
+          if(!moveCursor[spec.memberid]) {
+            moveCursor[spec.memberid] = op
+          }
+          break
+      }
+    }
+    while(operations && remainingAddOps > 0) {
+      operations.reverse();
+      operations.forEach(processOp);
+      operations = undoStates.pop()
+    }
+    return values(addCursor).concat(values(moveCursor))
+  }
+  this.subscribe = function(signal, callback) {
+    eventNotifier.subscribe(signal, callback)
+  };
+  this.unsubscribe = function(signal, callback) {
+    eventNotifier.unsubscribe(signal, callback)
+  };
+  this.hasUndoStates = function() {
+    return undoStates.length > 0
+  };
+  this.hasRedoStates = function() {
+    return redoStates.length > 0
+  };
+  this.setOdtDocument = function(newDocument) {
+    odtDocument = newDocument
+  };
+  this.resetInitialState = function() {
+    undoStates.length = 0;
+    redoStates.length = 0;
+    initialState.length = 0;
+    currentUndoState.length = 0;
+    initialDoc = null;
+    emitStackChange()
+  };
+  this.saveInitialState = function() {
+    var odfContainer = odtDocument.getOdfCanvas().odfContainer(), annotationManager = odtDocument.getOdfCanvas().getAnnotationManager();
+    if(annotationManager) {
+      annotationManager.forgetAnnotations()
+    }
+    initialDoc = odfContainer.rootElement.cloneNode(true);
+    odtDocument.getOdfCanvas().refreshAnnotations();
+    removeCursors(initialDoc);
+    completeCurrentUndoState();
+    undoStates.unshift(initialState);
+    currentUndoState = initialState = extractCursorStates(undoStates);
+    undoStates.length = 0;
+    redoStates.length = 0;
+    emitStackChange()
+  };
+  this.setPlaybackFunction = function(playback_func) {
+    playFunc = playback_func
+  };
+  this.onOperationExecuted = function(op) {
+    redoStates.length = 0;
+    if(undoRules.isEditOperation(op) && currentUndoState === initialState || !undoRules.isPartOfOperationSet(op, currentUndoState)) {
+      completeCurrentUndoState();
+      currentUndoState = [op];
+      undoStates.push(currentUndoState);
+      eventNotifier.emit(gui.UndoManager.signalUndoStateCreated, {operations:currentUndoState});
+      emitStackChange()
+    }else {
+      currentUndoState.push(op);
+      eventNotifier.emit(gui.UndoManager.signalUndoStateModified, {operations:currentUndoState})
+    }
+  };
+  this.moveForward = function(states) {
+    var moved = 0, redoOperations;
+    while(states && redoStates.length) {
+      redoOperations = redoStates.pop();
+      undoStates.push(redoOperations);
+      redoOperations.forEach(playFunc);
+      states -= 1;
+      moved += 1
+    }
+    if(moved) {
+      currentUndoState = mostRecentUndoState();
+      emitStackChange()
+    }
+    return moved
+  };
+  this.moveBackward = function(states) {
+    var odfCanvas = odtDocument.getOdfCanvas(), odfContainer = odfCanvas.odfContainer(), moved = 0;
+    while(states && undoStates.length) {
+      redoStates.push(undoStates.pop());
+      states -= 1;
+      moved += 1
+    }
+    if(moved) {
+      odfContainer.setRootElement(initialDoc.cloneNode(true));
+      odfCanvas.setOdfContainer(odfContainer, true);
+      eventNotifier.emit(gui.TrivialUndoManager.signalDocumentRootReplaced, {});
+      odtDocument.getCursors().forEach(function(cursor) {
+        odtDocument.removeCursor(cursor.getMemberId())
+      });
+      initialState.forEach(playFunc);
+      undoStates.forEach(function(ops) {
+        ops.forEach(playFunc)
+      });
+      odfCanvas.refreshCSS();
+      currentUndoState = mostRecentUndoState() || initialState;
+      emitStackChange()
+    }
+    return moved
+  }
+};
+gui.TrivialUndoManager.signalDocumentRootReplaced = "documentRootReplaced";
+(function() {
+  return gui.TrivialUndoManager
+})();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("core.EventNotifier");
+runtime.loadClass("odf.OdfUtils");
+runtime.loadClass("gui.SelectionMover");
+runtime.loadClass("gui.StyleHelper");
+runtime.loadClass("core.PositionFilterChain");
+ops.OdtDocument = function OdtDocument(odfCanvas) {
+  var self = this, textns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0", odfUtils, cursors = {}, eventNotifier = new core.EventNotifier([ops.OdtDocument.signalCursorAdded, ops.OdtDocument.signalCursorRemoved, ops.OdtDocument.signalCursorMoved, ops.OdtDocument.signalParagraphChanged, ops.OdtDocument.signalParagraphStyleModified, ops.OdtDocument.signalStyleCreated, ops.OdtDocument.signalStyleDeleted, ops.OdtDocument.signalTableAdded, ops.OdtDocument.signalOperationExecuted, ops.OdtDocument.signalUndoStackChanged]), 
+  FILTER_ACCEPT = core.PositionFilter.FilterResult.FILTER_ACCEPT, FILTER_REJECT = core.PositionFilter.FilterResult.FILTER_REJECT, filter;
+  function getRootNode() {
+    var element = odfCanvas.odfContainer().getContentElement(), localName = element && element.localName;
+    runtime.assert(localName === "text", "Unsupported content element type '" + localName + "'for OdtDocument");
+    return element
+  }
+  function RootFilter(memberId) {
+    function isRoot(node) {
+      if(node.namespaceURI === odf.Namespaces.officens && node.localName === "text" || node.namespaceURI === odf.Namespaces.officens && node.localName === "annotation") {
+        return true
+      }
+      return false
+    }
+    function getRoot(node) {
+      while(!isRoot(node)) {
+        node = (node.parentNode)
+      }
+      return node
+    }
+    this.acceptPosition = function(iterator) {
+      var node = iterator.container(), cursorNode = cursors[memberId].getNode();
+      if(getRoot(node) === getRoot(cursorNode)) {
+        return FILTER_ACCEPT
+      }
+      return FILTER_REJECT
+    }
+  }
+  function TextPositionFilter() {
+    function checkLeftRight(container, leftNode, rightNode) {
+      var r, firstPos, rightOfChar;
+      if(leftNode) {
+        r = odfUtils.lookLeftForCharacter(leftNode);
+        if(r === 1) {
+          return FILTER_ACCEPT
+        }
+        if(r === 2 && (odfUtils.scanRightForAnyCharacter(rightNode) || odfUtils.scanRightForAnyCharacter(odfUtils.nextNode(container)))) {
+          return FILTER_ACCEPT
+        }
+      }
+      firstPos = leftNode === null && odfUtils.isParagraph(container);
+      rightOfChar = odfUtils.lookRightForCharacter(rightNode);
+      if(firstPos) {
+        if(rightOfChar) {
+          return FILTER_ACCEPT
+        }
+        return odfUtils.scanRightForAnyCharacter(rightNode) ? FILTER_REJECT : FILTER_ACCEPT
+      }
+      if(!rightOfChar) {
+        return FILTER_REJECT
+      }
+      leftNode = leftNode || odfUtils.previousNode(container);
+      return odfUtils.scanLeftForAnyCharacter(leftNode) ? FILTER_REJECT : FILTER_ACCEPT
+    }
+    this.acceptPosition = function(iterator) {
+      var container = iterator.container(), nodeType = container.nodeType, offset, text, leftChar, rightChar, leftNode, rightNode, r;
+      if(nodeType !== Node.ELEMENT_NODE && nodeType !== Node.TEXT_NODE) {
+        return FILTER_REJECT
+      }
+      if(nodeType === Node.TEXT_NODE) {
+        if(!odfUtils.isGroupingElement(container.parentNode) || odfUtils.isWithinTrackedChanges(container.parentNode, getRootNode())) {
+          return FILTER_REJECT
+        }
+        offset = iterator.unfilteredDomOffset();
+        text = container.data;
+        runtime.assert(offset !== text.length, "Unexpected offset.");
+        if(offset > 0) {
+          leftChar = text.substr(offset - 1, 1);
+          if(!odfUtils.isODFWhitespace(leftChar)) {
+            return FILTER_ACCEPT
+          }
+          if(offset > 1) {
+            leftChar = text.substr(offset - 2, 1);
+            if(!odfUtils.isODFWhitespace(leftChar)) {
+              r = FILTER_ACCEPT
+            }else {
+              if(!odfUtils.isODFWhitespace(text.substr(0, offset))) {
+                return FILTER_REJECT
+              }
+            }
+          }else {
+            leftNode = odfUtils.previousNode(container);
+            if(odfUtils.scanLeftForNonWhitespace(leftNode)) {
+              r = FILTER_ACCEPT
+            }
+          }
+          if(r === FILTER_ACCEPT) {
+            return odfUtils.isTrailingWhitespace(container, offset) ? FILTER_REJECT : FILTER_ACCEPT
+          }
+          rightChar = text.substr(offset, 1);
+          if(odfUtils.isODFWhitespace(rightChar)) {
+            return FILTER_REJECT
+          }
+          return odfUtils.scanLeftForAnyCharacter(odfUtils.previousNode(container)) ? FILTER_REJECT : FILTER_ACCEPT
+        }
+        leftNode = iterator.leftNode();
+        rightNode = container;
+        container = (container.parentNode);
+        r = checkLeftRight(container, leftNode, rightNode)
+      }else {
+        if(!odfUtils.isGroupingElement(container) || odfUtils.isWithinTrackedChanges(container, getRootNode())) {
+          r = FILTER_REJECT
+        }else {
+          leftNode = iterator.leftNode();
+          rightNode = iterator.rightNode();
+          r = checkLeftRight(container, leftNode, rightNode)
+        }
+      }
+      return r
+    }
+  }
+  function getIteratorAtPosition(position) {
+    var iterator = gui.SelectionMover.createPositionIterator(getRootNode());
+    position += 1;
+    while(position > 0 && iterator.nextPosition()) {
+      if(filter.acceptPosition(iterator) === 1) {
+        position -= 1
+      }
+    }
+    return iterator
+  }
+  this.getIteratorAtPosition = getIteratorAtPosition;
+  function getPositionInTextNode(position, memberid) {
+    var iterator = gui.SelectionMover.createPositionIterator(getRootNode()), lastTextNode = null, node, nodeOffset = 0, cursorNode = null;
+    runtime.assert(position >= 0, "position must be >= 0");
+    if(filter.acceptPosition(iterator) === 1) {
+      node = iterator.container();
+      if(node.nodeType === Node.TEXT_NODE) {
+        lastTextNode = (node);
+        nodeOffset = 0
+      }
+    }else {
+      position += 1
+    }
+    while(position > 0 || lastTextNode === null) {
+      if(!iterator.nextPosition()) {
+        return null
+      }
+      if(filter.acceptPosition(iterator) === 1) {
+        position -= 1;
+        node = iterator.container();
+        if(node.nodeType === Node.TEXT_NODE) {
+          if(node !== lastTextNode) {
+            lastTextNode = (node);
+            nodeOffset = iterator.domOffset()
+          }else {
+            nodeOffset += 1
+          }
+        }else {
+          if(lastTextNode !== null) {
+            if(position === 0) {
+              nodeOffset = lastTextNode.length;
+              break
+            }
+            lastTextNode = null
+          }else {
+            if(position === 0) {
+              lastTextNode = getRootNode().ownerDocument.createTextNode("");
+              node.insertBefore(lastTextNode, iterator.rightNode());
+              nodeOffset = 0;
+              break
+            }
+          }
+        }
+      }
+    }
+    if(lastTextNode === null) {
+      return null
+    }
+    if(memberid && cursors[memberid]) {
+      cursorNode = cursors[memberid].getNode();
+      while(nodeOffset === 0 && cursorNode.nextSibling && cursorNode.nextSibling.localName === "cursor") {
+        cursorNode.parentNode.insertBefore(cursorNode, cursorNode.nextSibling.nextSibling)
+      }
+      if(cursorNode && lastTextNode.length > 0) {
+        lastTextNode = getRootNode().ownerDocument.createTextNode("");
+        nodeOffset = 0;
+        cursorNode.parentNode.insertBefore(lastTextNode, cursorNode.nextSibling)
+      }
+    }
+    while(nodeOffset === 0 && lastTextNode.previousSibling && lastTextNode.previousSibling.localName === "cursor") {
+      node = lastTextNode.previousSibling;
+      if(lastTextNode.length > 0) {
+        lastTextNode = getRootNode().ownerDocument.createTextNode("")
+      }
+      node.parentNode.insertBefore(lastTextNode, node);
+      if(cursorNode === node) {
+        break
+      }
+    }
+    while(lastTextNode.previousSibling && lastTextNode.previousSibling.nodeType === Node.TEXT_NODE) {
+      lastTextNode.previousSibling.appendData(lastTextNode.data);
+      nodeOffset = lastTextNode.length + lastTextNode.previousSibling.length;
+      lastTextNode = lastTextNode.previousSibling;
+      lastTextNode.parentNode.removeChild(lastTextNode.nextSibling)
+    }
+    return{textNode:lastTextNode, offset:nodeOffset}
+  }
+  function getParagraphElement(node) {
+    return odfUtils.getParagraphElement(node)
+  }
+  function getParagraphStyleElement(styleName) {
+    var node;
+    node = odfCanvas.getFormatting().getStyleElement(styleName, "paragraph");
+    return node
+  }
+  function getParagraphStyleAttributes(styleName) {
+    var node = getParagraphStyleElement(styleName);
+    if(node) {
+      return odfCanvas.getFormatting().getInheritedStyleAttributes(node)
+    }
+    return null
+  }
+  function upgradeWhitespaceToElement(textNode, offset) {
+    runtime.assert(textNode.data[offset] === " ", "upgradeWhitespaceToElement: textNode.data[offset] should be a literal space");
+    var space = textNode.ownerDocument.createElementNS(textns, "text:s");
+    space.appendChild(textNode.ownerDocument.createTextNode(" "));
+    textNode.deleteData(offset, 1);
+    if(offset > 0) {
+      textNode = (textNode.splitText(offset))
+    }
+    textNode.parentNode.insertBefore(space, textNode);
+    return space
+  }
+  function upgradeWhitespacesAtPosition(position) {
+    var iterator = getIteratorAtPosition(position), container, offset, i;
+    iterator.previousPosition();
+    iterator.previousPosition();
+    for(i = -1;i <= 1;i += 1) {
+      container = iterator.container();
+      offset = iterator.unfilteredDomOffset();
+      if(container.nodeType === Node.TEXT_NODE && container.data[offset] === " " && odfUtils.isSignificantWhitespace(container, offset)) {
+        container = upgradeWhitespaceToElement((container), offset);
+        iterator.moveToEndOfNode(container)
+      }
+      iterator.nextPosition()
+    }
+  }
+  this.upgradeWhitespacesAtPosition = upgradeWhitespacesAtPosition;
+  this.getParagraphStyleElement = getParagraphStyleElement;
+  this.getParagraphElement = getParagraphElement;
+  this.getParagraphStyleAttributes = getParagraphStyleAttributes;
+  this.getPositionInTextNode = getPositionInTextNode;
+  this.fixCursorPositions = function(localMemberId) {
+    var posfilter = self.getPositionFilter(), memberId, cursor, stepCounter, steps;
+    for(memberId in cursors) {
+      if(cursors.hasOwnProperty(memberId)) {
+        cursor = cursors[memberId];
+        stepCounter = cursor.getStepCounter();
+        if(!stepCounter.isPositionWalkable(posfilter)) {
+          steps = stepCounter.countStepsToValidPosition(posfilter);
+          cursor.move(steps);
+          if(memberId === localMemberId) {
+            self.emit(ops.OdtDocument.signalCursorMoved, cursor)
+          }
+        }else {
+          if(self.getCursorSelection(memberId).length === 0) {
+            cursor.move(0)
+          }
+        }
+      }
+    }
+  };
+  this.getWalkableParagraphLength = function(paragraph) {
+    var iterator = getIteratorAtPosition(0), length = 0;
+    iterator.setUnfilteredPosition(paragraph, 0);
+    do {
+      if(getParagraphElement(iterator.container()) !== paragraph) {
+        return length
+      }
+      if(filter.acceptPosition(iterator) === 1) {
+        length += 1
+      }
+    }while(iterator.nextPosition());
+    return length
+  };
+  this.getDistanceFromCursor = function(memberid, node, offset) {
+    var counter, cursor = cursors[memberid], steps = 0;
+    runtime.assert(node !== null && node !== undefined, "OdtDocument.getDistanceFromCursor called without node");
+    if(cursor) {
+      counter = cursor.getStepCounter().countStepsToPosition;
+      steps = counter(node, offset, filter)
+    }
+    return steps
+  };
+  this.getCursorPosition = function(memberid) {
+    return-self.getDistanceFromCursor(memberid, getRootNode(), 0)
+  };
+  this.getCursorSelection = function(memberid) {
+    var counter, cursor = cursors[memberid], focusPosition = 0, stepsToAnchor = 0;
+    if(cursor) {
+      counter = cursor.getStepCounter().countStepsToPosition;
+      focusPosition = -counter(getRootNode(), 0, filter);
+      stepsToAnchor = counter(cursor.getAnchorNode(), 0, filter)
+    }
+    return{position:focusPosition + stepsToAnchor, length:-stepsToAnchor}
+  };
+  this.getPositionFilter = function() {
+    return filter
+  };
+  this.getOdfCanvas = function() {
+    return odfCanvas
+  };
+  this.getRootNode = getRootNode;
+  this.getDOM = function() {
+    return getRootNode().ownerDocument
+  };
+  this.getCursor = function(memberid) {
+    return cursors[memberid]
+  };
+  this.getCursors = function() {
+    var list = [], i;
+    for(i in cursors) {
+      if(cursors.hasOwnProperty(i)) {
+        list.push(cursors[i])
+      }
+    }
+    return list
+  };
+  this.addCursor = function(cursor) {
+    runtime.assert(Boolean(cursor), "OdtDocument::addCursor without cursor");
+    var distanceToFirstTextNode = cursor.getStepCounter().countForwardSteps(1, filter), memberid = cursor.getMemberId();
+    runtime.assert(Boolean(memberid), "OdtDocument::addCursor has cursor without memberid");
+    runtime.assert(!cursors[memberid], "OdtDocument::addCursor is adding a duplicate cursor with memberid " + memberid);
+    cursor.move(distanceToFirstTextNode);
+    cursors[memberid] = cursor
+  };
+  this.removeCursor = function(memberid) {
+    var cursor = cursors[memberid];
+    if(cursor) {
+      cursor.removeFromOdtDocument();
+      delete cursors[memberid];
+      self.emit(ops.OdtDocument.signalCursorRemoved, memberid);
+      return true
+    }
+    return false
+  };
+  this.getMetaData = function(metadataId) {
+    var node = odfCanvas.odfContainer().rootElement.firstChild;
+    while(node && node.localName !== "meta") {
+      node = node.nextSibling
+    }
+    node = node && node.firstChild;
+    while(node && node.localName !== metadataId) {
+      node = node.nextSibling
+    }
+    node = node && node.firstChild;
+    while(node && node.nodeType !== Node.TEXT_NODE) {
+      node = node.nextSibling
+    }
+    return node ? node.data : null
+  };
+  this.getFormatting = function() {
+    return odfCanvas.getFormatting()
+  };
+  this.getTextElements = function(range, includeInsignificantWhitespace) {
+    return odfUtils.getTextElements(range, includeInsignificantWhitespace)
+  };
+  this.getParagraphElements = function(range) {
+    return odfUtils.getParagraphElements(range)
+  };
+  this.emit = function(eventid, args) {
+    eventNotifier.emit(eventid, args)
+  };
+  this.subscribe = function(eventid, cb) {
+    eventNotifier.subscribe(eventid, cb)
+  };
+  this.unsubscribe = function(eventid, cb) {
+    eventNotifier.unsubscribe(eventid, cb)
+  };
+  this.createRootFilter = function(inputMemberId) {
+    return new RootFilter(inputMemberId)
+  };
+  function init() {
+    filter = new TextPositionFilter;
+    odfUtils = new odf.OdfUtils
+  }
+  init()
+};
+ops.OdtDocument.signalCursorAdded = "cursor/added";
+ops.OdtDocument.signalCursorRemoved = "cursor/removed";
+ops.OdtDocument.signalCursorMoved = "cursor/moved";
+ops.OdtDocument.signalParagraphChanged = "paragraph/changed";
+ops.OdtDocument.signalTableAdded = "table/added";
+ops.OdtDocument.signalStyleCreated = "style/created";
+ops.OdtDocument.signalStyleDeleted = "style/deleted";
+ops.OdtDocument.signalParagraphStyleModified = "paragraphstyle/modified";
+ops.OdtDocument.signalOperationExecuted = "operation/executed";
+ops.OdtDocument.signalUndoStackChanged = "undo/changed";
+(function() {
+  return ops.OdtDocument
+})();
+/*
+
+ Copyright (C) 2012-2013 KO GmbH <copyright@kogmbh.com>
+
+ @licstart
+ The JavaScript code in this page is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Affero General Public License
+ (GNU AGPL) as published by the Free Software Foundation, either version 3 of
+ the License, or (at your option) any later version.  The code is distributed
+ WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE.  See the GNU AGPL for more details.
+
+ As additional permission under GNU AGPL version 3 section 7, you
+ may distribute non-source (e.g., minimized or compacted) forms of
+ that code without the copy of the GNU GPL normally required by
+ section 4, provided you include this license notice and a URL
+ through which recipients can access the Corresponding Source.
+
+ As a special exception to the AGPL, any HTML file which merely makes function
+ calls to this code, and for that purpose includes it by reference shall be
+ deemed a separate work for copyright law purposes. In addition, the copyright
+ holders of this code give you permission to combine this code with free
+ software libraries that are released under the GNU LGPL. You may copy and
+ distribute such a system following the terms of the GNU AGPL for this code
+ and the LGPL for the libraries. If you modify this code, you may extend this
+ exception to your version of the code, but you are not obligated to do so.
+ If you do not wish to do so, delete this exception statement from your
+ version.
+
+ This license applies to this entire compilation.
+ @licend
+ @source: http://www.webodf.org/
+ @source: http://gitorious.org/webodf/webodf/
+*/
+runtime.loadClass("ops.TrivialMemberModel");
+runtime.loadClass("ops.TrivialOperationRouter");
+runtime.loadClass("ops.OperationFactory");
+runtime.loadClass("ops.OdtDocument");
+ops.Session = function Session(odfCanvas) {
+  var self = this, operationFactory = new ops.OperationFactory, odtDocument = new ops.OdtDocument(odfCanvas), memberModel = new ops.TrivialMemberModel, operationRouter = null;
+  this.setMemberModel = function(uModel) {
+    memberModel = uModel
+  };
+  this.setOperationFactory = function(opFactory) {
+    operationFactory = opFactory;
+    if(operationRouter) {
+      operationRouter.setOperationFactory(operationFactory)
+    }
+  };
+  this.setOperationRouter = function(opRouter) {
+    operationRouter = opRouter;
+    opRouter.setPlaybackFunction(function(op) {
+      op.execute(odtDocument);
+      odtDocument.emit(ops.OdtDocument.signalOperationExecuted, op)
+    });
+    opRouter.setOperationFactory(operationFactory)
+  };
+  this.getMemberModel = function() {
+    return memberModel
+  };
+  this.getOperationFactory = function() {
+    return operationFactory
+  };
+  this.getOdtDocument = function() {
+    return odtDocument
+  };
+  this.enqueue = function(operation) {
+    operationRouter.push(operation)
+  };
+  function init() {
+    self.setOperationRouter(new ops.TrivialOperationRouter)
+  }
+  init()
+};
+var webodf_css = "@namespace draw url(urn:oasis:names:tc:opendocument:xmlns:drawing:1.0);\n@namespace fo url(urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0);\n@namespace office url(urn:oasis:names:tc:opendocument:xmlns:office:1.0);\n@namespace presentation url(urn:oasis:names:tc:opendocument:xmlns:presentation:1.0);\n@namespace style url(urn:oasis:names:tc:opendocument:xmlns:style:1.0);\n@namespace svg url(urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0);\n@namespace table url(urn:oasis:names:tc:opendocument:xmlns:table:1.0);\n@namespace text url(urn:oasis:names:tc:opendocument:xmlns:text:1.0);\n@namespace runtimens url(urn:webodf); /* namespace for runtime only */\n@namespace cursor url(urn:webodf:names:cursor);\n@namespace editinfo url(urn:webodf:names:editinfo);\n@namespace annotation url(urn:webodf:names:annotation);\n@namespace dc url(http://purl.org/dc/elements/1.1/);\n\noffice|document > *, office|document-content > * {\n  display: none;\n}\noffice|body, office|document {\n  display: inline-block;\n  position: relative;\n}\n\ntext|p, text|h {\n  display: block;\n  padding: 0;\n  margin: 0;\n  line-height: normal;\n  position: relative;\n  min-height: 1.3em; /* prevent empty paragraphs and headings from collapsing if they are empty */\n}\n*[runtimens|containsparagraphanchor] {\n  position: relative;\n}\ntext|s {\n    white-space: pre;\n}\ntext|tab {\n  display: inline;\n  white-space: pre;\n}\ntext|line-break {\n  content: \" \";\n  display: block;\n}\ntext|tracked-changes {\n  /*Consumers that do not support change tracking, should ignore changes.*/\n  display: none;\n}\noffice|binary-data {\n  display: none;\n}\noffice|text {\n  display: block;\n  text-align: left;\n  overflow: visible;\n  word-wrap: break-word;\n}\n\noffice|text::selection {\n    /** Let's not draw selection highlight that overflows into the office|text\n     * node when selecting content across several paragraphs\n     */\n    background: transparent;\n}\n\noffice|spreadsheet {\n  display: block;\n  border-collapse: collapse;\n  empty-cells: show;\n  font-family: sans-serif;\n  font-size: 10pt;\n  text-align: left;\n  page-break-inside: avoid;\n  overflow: hidden;\n}\noffice|presentation {\n  display: inline-block;\n  text-align: left;\n}\n#shadowContent {\n  display: inline-block;\n  text-align: left;\n}\ndraw|page {\n  display: block;\n  position: relative;\n  overflow: hidden;\n}\npresentation|notes, presentation|footer-decl, presentation|date-time-decl {\n    display: none;\n}\n@media print {\n  draw|page {\n    border: 1pt solid black;\n    page-break-inside: avoid;\n  }\n  presentation|notes {\n    /*TODO*/\n  }\n}\noffice|spreadsheet text|p {\n  border: 0px;\n  padding: 1px;\n  margin: 0px;\n}\noffice|spreadsheet table|table {\n  margin: 3px;\n}\noffice|spreadsheet table|table:after {\n  /* show sheet name the end of the sheet */\n  /*content: attr(table|name);*/ /* gives parsing error in opera */\n}\noffice|spreadsheet table|table-row {\n  counter-increment: row;\n}\noffice|spreadsheet table|table-row:before {\n  width: 3em;\n  background: #cccccc;\n  border: 1px solid black;\n  text-align: center;\n  content: counter(row);\n  display: table-cell;\n}\noffice|spreadsheet table|table-cell {\n  border: 1px solid #cccccc;\n}\ntable|table {\n  display: table;\n}\ndraw|frame table|table {\n  width: 100%;\n  height: 100%;\n  background: white;\n}\ntable|table-header-rows {\n  display: table-header-group;\n}\ntable|table-row {\n  display: table-row;\n}\ntable|table-column {\n  display: table-column;\n}\ntable|table-cell {\n  width: 0.889in;\n  display: table-cell;\n  word-break: break-all; /* prevent long words from extending out the table cell */\n}\ndraw|frame {\n  display: block;\n}\ndraw|image {\n  display: block;\n  width: 100%;\n  height: 100%;\n  top: 0px;\n  left: 0px;\n  background-repeat: no-repeat;\n  background-size: 100% 100%;\n  -moz-background-size: 100% 100%;\n}\n/* only show the first image in frame */\ndraw|frame > draw|image:nth-of-type(n+2) {\n  display: none;\n}\ntext|list:before {\n    display: none;\n    content:\"\";\n}\ntext|list {\n    counter-reset: list;\n}\ntext|list-item {\n    display: block;\n}\ntext|number {\n    display:none;\n}\n\ntext|a {\n    color: blue;\n    text-decoration: underline;\n    cursor: pointer;\n}\ntext|note-citation {\n    vertical-align: super;\n    font-size: smaller;\n}\ntext|note-body {\n    display: none;\n}\ntext|note:hover text|note-citation {\n    background: #dddddd;\n}\ntext|note:hover text|note-body {\n    display: block;\n    left:1em;\n    max-width: 80%;\n    position: absolute;\n    background: #ffffaa;\n}\nsvg|title, svg|desc {\n    display: none;\n}\nvideo {\n    width: 100%;\n    height: 100%\n}\n\n/* below set up the cursor */\ncursor|cursor {\n    display: inline;\n    width: 0px;\n    height: 1em;\n    /* making the position relative enables the avatar to use\n       the cursor as reference for its absolute position */\n    position: relative;\n    z-index: 1;\n}\ncursor|cursor > span {\n    display: inline;\n    position: absolute;\n    top: 5%; /* push down the caret; 0px can do the job, 5% looks better, 10% is a bit over */\n    height: 1em;\n    border-left: 2px solid black;\n    outline: none;\n}\n\ncursor|cursor > div {\n    padding: 3px;\n    box-shadow: 0px 0px 5px rgba(50, 50, 50, 0.75);\n    border: none !important;\n    border-radius: 5px;\n    opacity: 0.3;\n}\n\ncursor|cursor > div > img {\n    border-radius: 5px;\n}\n\ncursor|cursor > div.active {\n    opacity: 0.8;\n}\n\ncursor|cursor > div:after {\n    content: ' ';\n    position: absolute;\n    width: 0px;\n    height: 0px;\n    border-style: solid;\n    border-width: 8.7px 5px 0 5px;\n    border-color: black transparent transparent transparent;\n\n    top: 100%;\n    left: 43%;\n}\n\n\n.editInfoMarker {\n    position: absolute;\n    width: 10px;\n    height: 100%;\n    left: -20px;\n    opacity: 0.8;\n    top: 0;\n    border-radius: 5px;\n    background-color: transparent;\n    box-shadow: 0px 0px 5px rgba(50, 50, 50, 0.75);\n}\n.editInfoMarker:hover {\n    box-shadow: 0px 0px 8px rgba(0, 0, 0, 1);\n}\n\n.editInfoHandle {\n    position: absolute;\n    background-color: black;\n    padding: 5px;\n    border-radius: 5px;\n    opacity: 0.8;\n    box-shadow: 0px 0px 5px rgba(50, 50, 50, 0.75);\n    bottom: 100%;\n    margin-bottom: 10px;\n    z-index: 3;\n    left: -25px;\n}\n.editInfoHandle:after {\n    content: ' ';\n    position: absolute;\n    width: 0px;\n    height: 0px;\n    border-style: solid;\n    border-width: 8.7px 5px 0 5px;\n    border-color: black transparent transparent transparent;\n\n    top: 100%;\n    left: 5px;\n}\n.editInfo {\n    font-family: sans-serif;\n    font-weight: normal;\n    font-style: normal;\n    text-decoration: none;\n    color: white;\n    width: 100%;\n    height: 12pt;\n}\n.editInfoColor {\n    float: left;\n    width: 10pt;\n    height: 10pt;\n    border: 1px solid white;\n}\n.editInfoAuthor {\n    float: left;\n    margin-left: 5pt;\n    font-size: 10pt;\n    text-align: left;\n    height: 12pt;\n    line-height: 12pt;\n}\n.editInfoTime {\n    float: right;\n    margin-left: 30pt;\n    font-size: 8pt;\n    font-style: italic;\n    color: yellow;\n    height: 12pt;\n    line-height: 12pt;\n}\n\n.annotationWrapper {\n    display: inline;\n    position: relative;\n}\n\n.annotationNote {\n    width: 4cm;\n    position: absolute;\n    display: inline;\n    z-index: 10;\n}\n.annotationNote > office|annotation {\n    display: block;\n}\n\n.annotationConnector {\n    position: absolute;\n    display: inline;\n    z-index: 10;\n    border-top: 1px dashed brown;\n}\n.annotationConnector.angular {\n    -moz-transform-origin: left top;\n    -webkit-transform-origin: left top;\n    -ms-transform-origin: left top;\n    transform-origin: left top;\n}\n.annotationConnector.horizontal {\n    left: 0;\n}\n.annotationConnector.horizontal:before {\n    content: '';\n    display: inline;\n    position: absolute;\n    width: 0px;\n    height: 0px;\n    border-style: solid;\n    border-width: 8.7px 5px 0 5px;\n    border-color: brown transparent transparent transparent;\n    top: -1px;\n    left: -5px;\n}\n\noffice|annotation {\n    width: 100%;\n    height: 100%;\n    display: none;\n    background: rgb(198, 238, 184);\n    background: -moz-linear-gradient(90deg, rgb(198, 238, 184) 30%, rgb(180, 196, 159) 100%);\n    background: -webkit-linear-gradient(90deg, rgb(198, 238, 184) 30%, rgb(180, 196, 159) 100%);\n    background: -o-linear-gradient(90deg, rgb(198, 238, 184) 30%, rgb(180, 196, 159) 100%);\n    background: -ms-linear-gradient(90deg, rgb(198, 238, 184) 30%, rgb(180, 196, 159) 100%);\n    background: linear-gradient(180deg, rgb(198, 238, 184) 30%, rgb(180, 196, 159) 100%);\n    box-shadow: 0 3px 4px -3px #ccc;\n}\n\noffice|annotation > dc|creator {\n    display: block;\n    font-size: 10pt;\n    font-weight: normal;\n    font-style: normal;\n    font-family: sans-serif;\n    color: white;\n    background-color: brown;\n    padding: 4px;\n}\noffice|annotation > dc|date {\n    display: block;\n    font-size: 10pt;\n    font-weight: normal;\n    font-style: normal;\n    font-family: sans-serif;\n    border: 4px solid transparent;\n}\noffice|annotation > text|list {\n    display: block;\n    padding: 5px;\n}\n\n/* This is very temporary CSS. This must go once\n * we start bundling webodf-default ODF styles for annotations.\n */\noffice|annotation text|p {\n    font-size: 10pt;\n    color: black;\n    font-weight: normal;\n    font-style: normal;\n    text-decoration: none;\n    font-family: sans-serif;\n}\n\ndc|*::selection {\n    background: transparent;\n}\ndc|*::-moz-selection {\n    background: transparent;\n}\n\n#annotationsPane {\n    background-color: #EAEAEA;\n    width: 4cm;\n    height: 100%;\n    display: inline-block;\n    position: absolute;\n    outline: 1px solid #ccc;\n}\n\n.annotationHighlight {\n    background-color: yellow;\n    position: relative;\n}\n";
+
