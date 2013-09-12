@@ -29,6 +29,6 @@ OCP\App::addNavigationEntry(array(
 	'id' => 'movies_index', 
 	'order' => 80, 
 	'href' => OCP\Util::linkTo('movies', 'index.php'), 
-	'icon' => OCP\Util::imagePath('movies', 'movies.png'), 
+	'icon' => OCP\Util::imagePath('movies', 'videos.svg'), 
 	'name' => 'Videos')
 );
